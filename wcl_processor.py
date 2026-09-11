@@ -2,7 +2,7 @@
 wcl_processor.py
 ================================================================================
 Engine pemroses data WCL NR26 Report Generator & Smart ISD Integrator.
-Versi: 2.0 (Mendukung Multi-Schema, Single/Batch KPI & TWAMP, Custom Date Ranges)
+Versi: 2.1 (Band Filter, Multi-Schema, Single/Batch KPI & TWAMP, Custom Date Ranges)
 ================================================================================
 """
 
@@ -24,12 +24,6 @@ import pandas as pd
 # 1. SMART ISD MATCHER
 # ══════════════════════════════════════════════════════════════════════════════
 class ISDMatcher:
-    """
-    Membaca, menormalisasi, dan mencocokkan data ISD berdasarkan kombinasi Site ID dan Sector.
-    Mendukung format:
-      - Kolom terpisah: [Site_ID] dan [Sector]
-      - Kolom gabungan: misal '13DPK0208 sector 1', '13DPK0208_1', '13DPK0208 1'
-    """
     def __init__(self, data_source=None, site_col=None, sector_col=None, isd_col=None, combined_col=None):
         self.raw_df = None
         self.mapping = {}         # (clean_site, clean_sec) -> isd_val
@@ -179,7 +173,6 @@ class ISDMatcher:
                 if combined_col:
                     break
 
-        # Fallback jika 2 kolom
         other_cols = [c for c in df.columns if c != isd_col]
         if not site_col and not combined_col and len(other_cols) >= 1:
             site_col = other_cols[0]
@@ -196,7 +189,6 @@ class ISDMatcher:
             sec_val = row.get(sector_col) if sector_col else None
             comb_val = row.get(combined_col) if combined_col else None
 
-            # Skenario A: site_col & sector_col
             if site_val is not None and not pd.isna(site_val):
                 clean_site = self.normalize_site(site_val)
                 clean_sec = self.normalize_sector(sec_val) if sec_val is not None else None
@@ -217,7 +209,6 @@ class ISDMatcher:
                     else:
                         self.site_fallback[clean_site] = isd_val
 
-            # Skenario B: combined_col
             if comb_val is not None and not pd.isna(comb_val):
                 ext_st, ext_sc = self.extract_site_sector_from_string(comb_val)
                 if ext_st and ext_sc is not None:
@@ -260,11 +251,15 @@ class ISDMatcher:
     def match_preview(self, cells_list):
         records = []
         for item in cells_list:
-            if len(item) == 3:
+            if len(item) == 4:
+                site, sec, cellname, band = item
+            elif len(item) == 3:
                 site, sec, cellname = item
+                band = ""
             else:
                 site, sec = item
                 cellname = ""
+                band = ""
             val = self.get_isd(site, sec)
             records.append({
                 "Site ID": site,
@@ -303,10 +298,9 @@ def left_va():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3. MULTI-SCHEMA KPI CONFIGURATION (Mendukung Depok 03 & Depok 01 MSH)
+# 3. MULTI-SCHEMA KPI CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
 KPI_DEFINITIONS = [
-    # (sheet_name, nom_candidates, denom_candidates, val_candidates, threshold, cond, numfmt)
     (
         'DL USER THP',
         ['dl_user_thrput_nom_5g', 'dl_user_throughput_nom_bh'],
@@ -451,15 +445,14 @@ def find_header_index(headers_lower, candidate_list):
                 return idx
     return None
 
-def get_kpi_value(raw_cell, sn):
-    nom_list   = raw_cell.get(sn + '_nom', [])
-    denom_list = raw_cell.get(sn + '_denom', [])
-    if nom_list and denom_list:
-        total_nom   = sum(nom_list)
-        total_denom = sum(denom_list)
-        if total_denom != 0:
-            return total_nom / total_denom
-    return avg(raw_cell.get(sn, []))
+def extract_band_from_cell_or_row(cell_str, band_col_val=None):
+    c = str(cell_str or '').upper()
+    b = str(band_col_val or '').upper()
+    if '5G26' in c or '2600' in b or '5G26' in b:
+        return '5G26'
+    if '5G21' in c or '2100' in b or '5G21' in b:
+        return '5G21'
+    return 'OTHER'
 
 def add_cf_text(ws, col_letter, r1, r2, search_text, fill_color='FFFF00'):
     if r2 < r1: return
@@ -510,15 +503,10 @@ def calc_period_ta(records_by_date, dates):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. CORE WCL PROCESSOR CLASS (Mendukung Single & Batch)
+# 5. CORE WCL PROCESSOR CLASS (DENGAN BAND FILTER & FALLBACK BASELINE)
 # ══════════════════════════════════════════════════════════════════════════════
 class WCLProcessor:
     def __init__(self, kpi_sources=None, twamp_sources=None, isd_source=None, log_callback=None):
-        """
-        kpi_sources: Single path/BytesIO, list of paths/BytesIOs, atau path folder.
-        twamp_sources: None (ambil dari sheet KPI), single path/BytesIO, list, atau folder.
-        isd_source: DataFrame, dict, path file, atau instance ISDMatcher.
-        """
         self.kpi_sources = self._normalize_sources(kpi_sources)
         self.twamp_sources = self._normalize_sources(twamp_sources)
         self.log_callback = log_callback or print
@@ -547,7 +535,7 @@ class WCLProcessor:
             for item in src:
                 if isinstance(item, str) and os.path.isdir(item):
                     for fn in os.listdir(item):
-                        if fn.endswith(('.xlsx', '.xlsm')):
+                        if fn.endswith(('.xlsx', '.xlsm')) and not fn.startswith('~$'):
                             res.append(os.path.join(item, fn))
                 else:
                     res.append(item)
@@ -555,7 +543,7 @@ class WCLProcessor:
         if isinstance(src, str) and os.path.isdir(src):
             res = []
             for fn in os.listdir(src):
-                if fn.endswith(('.xlsx', '.xlsm')):
+                if fn.endswith(('.xlsx', '.xlsm')) and not fn.startswith('~$'):
                     res.append(os.path.join(src, fn))
             return res
         return [src]
@@ -568,9 +556,6 @@ class WCLProcessor:
         return openpyxl.load_workbook(src, data_only=True, read_only=True)
 
     def inspect_sources(self):
-        """
-        Memindai seluruh sumber KPI dan TWAMP (baik single maupun batch).
-        """
         self.log(f"Memindai {len(self.kpi_sources)} sumber file KPI...")
         cluster_set = set()
         date_set = set()
@@ -611,7 +596,6 @@ class WCLProcessor:
         self.available_dates = sorted(list(date_set))
         self.all_sites = sorted(list(site_set))
 
-        # Pindai TWAMP (dari twamp_sources jika ada, atau fallback ke sheet 'twamp' pada KPI)
         twamp_sources_to_check = self.twamp_sources if self.twamp_sources else self.kpi_sources
         self.log(f"Memindai {len(twamp_sources_to_check)} sumber TWAMP...")
         tw_d_set = set()
@@ -657,13 +641,12 @@ class WCLProcessor:
         candidates = get_close_matches(target_cluster, self.clusters, n=1, cutoff=0.5)
         return candidates[0] if candidates else target_cluster
 
-    def get_cluster_cells_preview(self, target_cluster, site_filter=None):
-        """
-        Mengumpulkan daftar cell (Site, Sector, Cellname) dari cluster target.
-        """
+    def get_cluster_cells_preview(self, target_cluster, site_filter=None, band_filter='nr26_baseline_nr21'):
         matched_cl = self._match_cluster_name(target_cluster)
         site_filter_set = set(str(s).strip() for s in site_filter) if site_filter else None
-        cells_dict = {}
+        
+        cells_26 = {}
+        cells_21 = {}
 
         for src in self.kpi_sources:
             try:
@@ -679,6 +662,7 @@ class WCLProcessor:
                 i_site    = find_header_index(hdrs, ['site_id', 'site id', 'site', 'sitename'])
                 i_sector  = find_header_index(hdrs, ['sector_id', 'sector id', 'sector', 'sec_id', 'sec'])
                 i_cellname= find_header_index(hdrs, ['cellname', 'cell_name', 'short name', 'short_name'])
+                i_band    = find_header_index(hdrs, ['band', 'band_name'])
 
                 for row in ws5g.iter_rows(values_only=True):
                     if i_cluster is not None and row[i_cluster] != matched_cl:
@@ -686,48 +670,70 @@ class WCLProcessor:
                     site = row[i_site] if i_site is not None else None
                     sector = row[i_sector] if i_sector is not None else None
                     cell = row[i_cellname] if i_cellname is not None else None
+                    band_val = row[i_band] if i_band is not None else None
                     if not site:
                         continue
                     site_s = str(site).strip()
                     if site_filter_set and site_s not in site_filter_set:
                         continue
-                    cell_s = str(cell or '')
-                    if '5G26' not in cell_s:
-                        continue
 
                     clean_sec = ISDMatcher.normalize_sector(sector)
+                    band = extract_band_from_cell_or_row(cell, band_val)
                     key = (site_s, clean_sec)
-                    if key not in cells_dict:
-                        cells_dict[key] = cell_s
+
+                    if band == '5G26':
+                        cells_26[key] = str(cell or '')
+                    elif band == '5G21':
+                        cells_21[key] = str(cell or '')
 
                 wb.close()
             except Exception as e:
                 self.log(f"  [Peringatan] Preview cell error: {e}")
 
-        cells_sorted = sorted(cells_dict.keys(), key=lambda x: (x[0], x[1] if isinstance(x[1], int) else 0))
-        return [(k[0], k[1], cells_dict[k]) for k in cells_sorted]
+        # Tentukan cell list berdasarkan band_filter
+        result = []
+        if band_filter == 'nr21_only':
+            for k in sorted(cells_21.keys(), key=lambda x: (x[0], x[1] if isinstance(x[1], int) else 0)):
+                result.append((k[0], k[1], cells_21[k], '5G21'))
+        elif band_filter == 'all_bands_separate':
+            for k in sorted(cells_21.keys(), key=lambda x: (x[0], x[1] if isinstance(x[1], int) else 0)):
+                result.append((k[0], k[1], cells_21[k], '5G21'))
+            for k in sorted(cells_26.keys(), key=lambda x: (x[0], x[1] if isinstance(x[1], int) else 0)):
+                result.append((k[0], k[1], cells_26[k], '5G26'))
+        else:
+            # nr26_only atau nr26_baseline_nr21
+            all_keys = set(cells_26.keys()) | set(cells_21.keys())
+            for k in sorted(all_keys, key=lambda x: (x[0], x[1] if isinstance(x[1], int) else 0)):
+                # Prioritaskan nama cell 5G26
+                c_name = cells_26.get(k) or cells_21.get(k, '')
+                result.append((k[0], k[1], c_name, '5G26' if k in cells_26 else '5G21'))
 
-    def generate_report(self, target_cluster, site_filter=None,
+        return result
+
+    def generate_report(self, target_cluster, site_filter=None, band_filter='nr26_baseline_nr21',
                         before_dates=None, before_range=None,
                         after_dates=None, after_range=None,
                         twamp_dates=None, twamp_range=None,
                         output_file=None, progress_callback=None):
         """
-        Menghasilkan laporan Excel WCL NR26 lengkap.
-        Mendukung pemrosesan Single/Batch KPI & TWAMP.
+        Menghasilkan laporan Excel WCL NR26.
+        Mendukung Band Filter cerdas (NR26 + Baseline NR21).
         """
         def update_progress(pct, msg):
             self.log(msg)
             if progress_callback:
                 progress_callback(pct, msg)
 
-        update_progress(5, f"Mempersiapkan data untuk cluster '{target_cluster}'...")
+        update_progress(5, f"Mempersiapkan data untuk cluster '{target_cluster}' (Mode Band: {band_filter})...")
         matched_cluster = self._match_cluster_name(target_cluster)
         site_filter_set = set(str(s).strip() for s in site_filter) if site_filter else None
 
         all_dates  = set()
-        cells_info = {}
-        raw = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
+        cells_26 = {}
+        cells_21 = {}
+        
+        # raw[site][sector][band][date] = { kpi: [values], kpi_nom: [...], kpi_denom: [...] }
+        raw = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list)))))
         raw_ta = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
 
         update_progress(15, f"Membaca {len(self.kpi_sources)} file KPI dan mengagregasi data...")
@@ -747,8 +753,8 @@ class WCLProcessor:
                 i_site    = find_header_index(hdrs, ['site_id', 'site id', 'site', 'sitename'])
                 i_sector  = find_header_index(hdrs, ['sector_id', 'sector id', 'sector', 'sec_id', 'sec'])
                 i_cellname= find_header_index(hdrs, ['cellname', 'cell_name', 'short name', 'short_name'])
+                i_band    = find_header_index(hdrs, ['band', 'band_name'])
 
-                # Mapping KPI indices per file
                 kpi_map = {}
                 for (sn, noms, denoms, vals, *_) in KPI_DEFINITIONS:
                     kpi_map[sn] = {
@@ -768,6 +774,7 @@ class WCLProcessor:
                     site   = row[i_site] if i_site is not None else None
                     sector = row[i_sector] if i_sector is not None else None
                     cell   = row[i_cellname] if i_cellname is not None else None
+                    band_v = row[i_band] if i_band is not None else None
 
                     p_date = parse_date_val(date)
                     if not p_date or not site:
@@ -779,48 +786,61 @@ class WCLProcessor:
                     all_dates.add(p_date)
                     cell_s = str(cell or '')
                     sec_val = ISDMatcher.normalize_sector(sector)
+                    band = extract_band_from_cell_or_row(cell_s, band_v)
+                    key = (site_s, sec_val)
 
-                    # TA Avg 5G21 & 5G26
-                    band = '5G21' if '5G21' in cell_s else ('5G26' if '5G26' in cell_s else None)
-                    if band and sec_val is not None:
+                    if band == '5G26': cells_26[key] = cell_s
+                    elif band == '5G21': cells_21[key] = cell_s
+
+                    # TA Avg
+                    if band in ('5G21', '5G26') and sec_val is not None:
                         ta_v = row[i_ta_avg] if i_ta_avg is not None else None
                         ta_n = row[i_ta_nom] if i_ta_nom is not None else None
                         ta_d = row[i_ta_denom] if i_ta_denom is not None else None
                         raw_ta[site_s][sec_val][band][p_date].append((ta_v, ta_n, ta_d))
 
-                    if '5G26' not in cell_s:
-                        continue
-
-                    key = (site_s, sec_val)
-                    if key not in cells_info:
-                        cells_info[key] = cell_s
-
-                    # 9 KPI Agregasi
-                    for (sn, *_) in KPI_DEFINITIONS:
-                        cols = kpi_map[sn]
-                        vi = cols['val']
-                        if vi is not None and row[vi] is not None:
-                            try: raw[site_s][sec_val][p_date][sn].append(float(row[vi]))
-                            except: pass
-                        ni = cols['nom']
-                        if ni is not None and row[ni] is not None:
-                            try: raw[site_s][sec_val][p_date][sn+'_nom'].append(float(row[ni]))
-                            except: pass
-                        di = cols['denom']
-                        if di is not None and row[di] is not None:
-                            try: raw[site_s][sec_val][p_date][sn+'_denom'].append(float(row[di]))
-                            except: pass
+                    # 9 KPI
+                    if band in ('5G21', '5G26') and sec_val is not None:
+                        for (sn, *_) in KPI_DEFINITIONS:
+                            cols = kpi_map[sn]
+                            vi = cols['val']
+                            if vi is not None and row[vi] is not None:
+                                try: raw[site_s][sec_val][band][p_date][sn].append(float(row[vi]))
+                                except: pass
+                            ni = cols['nom']
+                            if ni is not None and row[ni] is not None:
+                                try: raw[site_s][sec_val][band][p_date][sn+'_nom'].append(float(row[ni]))
+                                except: pass
+                            di = cols['denom']
+                            if di is not None and row[di] is not None:
+                                try: raw[site_s][sec_val][band][p_date][sn+'_denom'].append(float(row[di]))
+                                except: pass
 
                 wb.close()
             except Exception as e:
                 self.log(f"  [Peringatan] Gagal membaca KPI source {idx_src+1}: {e}")
 
         all_dates = sorted(all_dates)
+
+        # Susun daftar baris cell target (cells_sorted) berdasarkan band_filter
+        cells_info = {}
+        if band_filter == 'nr21_only':
+            for k in sorted(cells_21.keys(), key=lambda x: (x[0], x[1] if isinstance(x[1], int) else 0)):
+                cells_info[k] = cells_21[k]
+        elif band_filter == 'nr26_only':
+            for k in sorted(cells_26.keys(), key=lambda x: (x[0], x[1] if isinstance(x[1], int) else 0)):
+                cells_info[k] = cells_26[k]
+        else:
+            # nr26_baseline_nr21 atau all
+            all_keys = set(cells_26.keys()) | set(cells_21.keys())
+            for k in sorted(all_keys, key=lambda x: (x[0], x[1] if isinstance(x[1], int) else 0)):
+                cells_info[k] = cells_26.get(k) or cells_21.get(k, '')
+
         cells_sorted = sorted(cells_info.keys(), key=lambda x: (x[0], x[1] if isinstance(x[1], int) else 0))
         sites_unique = sorted(set(k[0] for k in cells_sorted))
 
         if not cells_sorted:
-            raise ValueError(f"Tidak ada cell 5G26 yang cocok untuk cluster '{matched_cluster}'!")
+            raise ValueError(f"Tidak ada cell yang cocok untuk cluster '{matched_cluster}' dengan filter band '{band_filter}'!")
 
         update_progress(40, "Menentukan periode BEFORE, AFTER, dan TWAMP...")
         custom_bef = resolve_custom_dates(before_dates, before_range, all_dates, label="BEFORE")
@@ -832,6 +852,35 @@ class WCLProcessor:
 
         n_wcl = len(wcl_dates)
         n_post = len(post_dates)
+
+        def get_kpi_val_smart(site, sec, dt, sn):
+            """
+            Mengambil nilai KPI dengan logika fallback:
+            Jika band_filter == 'nr26_baseline_nr21':
+              Cari nilai di '5G26'. Jika tanggal tersebut belum ada 5G26 (misal Before),
+              ambil nilai baseline dari '5G21'!
+            """
+            target_band = '5G26' if band_filter != 'nr21_only' else '5G21'
+            cell_data = raw[site][sec][target_band].get(dt, {})
+
+            # Cek apakah ada data di target_band
+            nom = cell_data.get(sn + '_nom', [])
+            den = cell_data.get(sn + '_denom', [])
+            val = cell_data.get(sn, [])
+
+            if not nom and not den and not val and band_filter == 'nr26_baseline_nr21':
+                # Fallback cerdas ke baseline 5G21!
+                cell_data = raw[site][sec]['5G21'].get(dt, {})
+                nom = cell_data.get(sn + '_nom', [])
+                den = cell_data.get(sn + '_denom', [])
+                val = cell_data.get(sn, [])
+
+            if nom and den:
+                t_nom = sum(nom)
+                t_den = sum(den)
+                if t_den != 0:
+                    return t_nom / t_den
+            return avg(val)
 
         # TWAMP PROCESSING
         update_progress(50, "Memproses data TWAMP...")
@@ -885,7 +934,7 @@ class WCLProcessor:
         tw_sites = sorted(tw_sites)
 
         # BUILD OUTPUT WORKBOOK
-        update_progress(65, "Membangun workbook Excel & sheet KPI...")
+        update_progress(65, "Membangun workbook Excel & menyusun sheet KPI...")
         wb_out = Workbook()
         wb_out.remove(wb_out.active)
 
@@ -959,7 +1008,7 @@ class WCLProcessor:
                 wd(C_CN, cellname)
 
                 for i, dt in enumerate(wcl_dates):
-                    v = get_kpi_value(raw[site][sector][dt], sheet_name)
+                    v = get_kpi_val_smart(site, sector, dt, sheet_name)
                     wd(C_WS+i, v, numfmt=num_fmt, fill=BLUE_FILL)
 
                 f1 = remark_formula(cond, C_WS, C_WE, nr)
@@ -967,7 +1016,7 @@ class WCLProcessor:
                 c.value=f1; c.font=data_font(); c.fill=ORANGE_FILL; c.border=BORDER; c.alignment=center()
 
                 for i, dt in enumerate(post_dates):
-                    v = get_kpi_value(raw[site][sector][dt], sheet_name)
+                    v = get_kpi_val_smart(site, sector, dt, sheet_name)
                     wd(C_PS+i, v, numfmt=num_fmt, fill=GREEN_FILL)
 
                 if n_post > 0:
@@ -985,7 +1034,7 @@ class WCLProcessor:
             for r in range(3, LAST_DATA+1): ws.row_dimensions[r].height = 16
             ws.freeze_panes = 'E3'
 
-        # SHEET TA AVG DENGAN INJEKSI ISD
+        # SHEET TA AVG
         update_progress(80, "Menyusun sheet TA Avg & menyuntikkan data ISD (Site ID + Sector)...")
         ws_ta = wb_out.create_sheet(title='TA Avg')
         ws_ta.sheet_properties.tabColor = PINK_TAB
