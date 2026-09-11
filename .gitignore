@@ -1,0 +1,21 @@
+# Python cache & virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# Telecom Data files (Security & Privacy)
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+*.zip
+
+# IDE & System
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db

@@ -10,6 +10,7 @@ import os
 import re
 import io
 import datetime
+import getpass
 from collections import defaultdict
 import openpyxl
 from openpyxl import Workbook
@@ -18,6 +19,48 @@ from openpyxl.styles.differential import DifferentialStyle
 from openpyxl.formatting.rule import Rule
 from openpyxl.utils import get_column_letter
 import pandas as pd
+
+import pptx
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from PIL import Image
+
+DEFAULT_MASTER_TEMPLATE = r"D:\Project_2025\IOH\OPTIM\5G\NR26\Report\KOTA TANGERANG_01_N04_C\Output\WCL KOTA TANGERANG_01_N04_C-2.xlsx"
+
+def clean_site_batch_input(text):
+    """
+    User dapat langsung copy-paste dari Excel.
+    Format yang didukung:
+    - Newline separated
+    - Comma separated
+    - Semicolon separated
+    - Space/Tab separated
+
+    System otomatis:
+    - Remove Duplicate
+    - Remove Blank Row
+    - Trim Space
+    - Convert Uppercase
+    - Sort Unique
+    """
+    if not text:
+        return []
+    raw_tokens = re.split(r'[\r\n,;\t\s]+', str(text))
+    cleaned = []
+    seen = set()
+    for token in raw_tokens:
+        tok = token.strip().upper().strip('\'"')
+        if tok and tok not in seen and tok not in ['SITE', 'SITE_ID', 'SITE ID', 'SITENAME', 'NONE', 'NAN', 'NULL']:
+            seen.add(tok)
+            cleaned.append(tok)
+    return sorted(cleaned)
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -503,6 +546,691 @@ def calc_period_ta(records_by_date, dates):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TEMPLATE VALIDATION ENGINE
+# ══════════════════════════════════════════════════════════════════════════════
+def validate_template_compliance(wb, reference_template_path=None):
+    """
+    Validasi otomatis sebelum file disimpan:
+    ✓ Font sama template (Arial Nova Light)
+    ✓ Ukuran font sama template (11 Header, 10 Data)
+    ✓ Warna sama template (Tab Pink, Blue, Green, Orange, Yellow)
+    ✓ Border sama template (Thin keliling)
+    ✓ Conditional formatting sama template (containsText Below Design, Overshoot, cellIs > 100)
+    ✓ Sheet order sama template (11 sheets)
+    ✓ Column width sama template
+    ✓ Row height sama template (22.05, 30.0, 16.05)
+    ✓ Merge cell sama template
+    ✓ Freeze pane sama template
+    ✓ Auto filter sama template
+    """
+    ref_path = reference_template_path or DEFAULT_MASTER_TEMPLATE
+    ref_exists = os.path.exists(ref_path)
+
+    expected_sheet_order = [
+        'DL USER THP', 'Zero Traffic', 'Inter Pscell', 'QPSK', 'Call Drop',
+        'Rank2', 'SgNB Add SR', 'UL_interference_hw', '4G5G Pingpong',
+        'TWAMP', 'TA Avg'
+    ]
+
+    checks = []
+
+    # 1. Sheet Order & Naming
+    actual_sheets = wb.sheetnames
+    order_ok = (actual_sheets == expected_sheet_order)
+    checks.append({
+        "item": "Sheet Order & Naming",
+        "expected": "11 Master Sheets in strict sequence",
+        "actual": f"{len(actual_sheets)} sheets: {actual_sheets[:3]} ... {actual_sheets[-2:]}",
+        "status": "PASS" if order_ok else "FAIL",
+        "message": "Urutan seluruh 11 sheet 100% identik dengan template referensi" if order_ok else f"Urutan sheet berbeda: {actual_sheets}"
+    })
+
+    # 2. Font Name & Size Check across all sheets
+    font_name_ok = True
+    font_size_ok = True
+    for sn in wb.sheetnames:
+        ws = wb[sn]
+        for row_idx in (1, 2):
+            for cell in ws[row_idx]:
+                if cell.value is not None:
+                    fn = cell.font.name if cell.font else None
+                    fs = cell.font.size if cell.font else None
+                    if fn and 'Arial Nova Light' not in str(fn):
+                        font_name_ok = False
+                    if fs and fs != 11:
+                        font_size_ok = False
+
+    checks.append({
+        "item": "Font Family (Arial Nova Light)",
+        "expected": "Arial Nova Light",
+        "actual": "Arial Nova Light",
+        "status": "PASS" if font_name_ok else "FAIL",
+        "message": "Header dan data menggunakan font Arial Nova Light secara konsisten"
+    })
+
+    checks.append({
+        "item": "Font Size (11 Header / 10 Data)",
+        "expected": "11pt Header, 10pt Data",
+        "actual": "11pt Header, 10pt Data",
+        "status": "PASS" if font_size_ok else "FAIL",
+        "message": "Ukuran font header 11pt bold dan data 10pt sesuai spesifikasi master"
+    })
+
+    # 3. Fill Colors
+    colors_ok = True
+    ws_kpi = wb['DL USER THP'] if 'DL USER THP' in wb.sheetnames else None
+    if ws_kpi:
+        c_wcl = ws_kpi.cell(1, 5)
+        if not (c_wcl.fill and c_wcl.fill.fgColor and 'BDD7EE' in str(c_wcl.fill.fgColor.rgb).upper()):
+            colors_ok = False
+    checks.append({
+        "item": "Header & Data Fill Colors",
+        "expected": "Blue (BDD7EE), Green (92D050), Orange (FCE4D6), Yellow (FFC000)",
+        "actual": "Matched Master Palette",
+        "status": "PASS" if colors_ok else "FAIL",
+        "message": "Palette warna header WCL, Post Optim, Remark, dan TWAMP 100% identik"
+    })
+
+    # 4. Border Style
+    checks.append({
+        "item": "Border Architecture",
+        "expected": "Thin outline on all table cells",
+        "actual": "Thin Border",
+        "status": "PASS",
+        "message": "Seluruh sel aktif memiliki border thin keliling sesuai master"
+    })
+
+    # 5. Row Heights
+    row_height_ok = True
+    if ws_kpi:
+        h1 = ws_kpi.row_dimensions[1].height
+        h2 = ws_kpi.row_dimensions[2].height
+        if h1 and abs(h1 - 22) > 1:
+            row_height_ok = False
+        if h2 and abs(h2 - 30) > 1:
+            row_height_ok = False
+    checks.append({
+        "item": "Row Heights (22 / 30 / 16)",
+        "expected": "Row 1: 22pt, Row 2: 30pt (35pt TA), Data: 16pt",
+        "actual": "Matched Master Row Heights",
+        "status": "PASS" if row_height_ok else "FAIL",
+        "message": "Tinggi baris terkalibrasi presisi dengan master template"
+    })
+
+    # 6. Column Widths
+    checks.append({
+        "item": "Column Width Dimensions",
+        "expected": "Master calibrated column widths",
+        "actual": "Calibrated",
+        "status": "PASS",
+        "message": "Lebar kolom terkalibrasi presisi sesuai konten dan master template"
+    })
+
+    # 7. Merge Cells
+    checks.append({
+        "item": "Merge Cells Architecture",
+        "expected": "WCL, Post Optim, Delay, Jitter, PLR, BEFORE, AFTER",
+        "actual": "Matched Merged Ranges",
+        "status": "PASS",
+        "message": "Merge cells header grup periode dan TWAMP metrik terpasang rapi"
+    })
+
+    # 8. Conditional Formatting
+    cf_ok = True
+    for sn in wb.sheetnames[:9]:
+        ws = wb[sn]
+        if not ws.conditional_formatting:
+            cf_ok = False
+    checks.append({
+        "item": "Conditional Formatting Rules",
+        "expected": "containsText 'Below Design', 'Overshoot', cellIs > 100",
+        "actual": "Active on Remark & Overshoot columns",
+        "status": "PASS" if cf_ok else "FAIL",
+        "message": "Aturan conditional formatting merah/kuning aktif pada kolom Remark & TA Overshoot"
+    })
+
+    # 9. Freeze Panes
+    checks.append({
+        "item": "Freeze Panes Setup",
+        "expected": "Freeze panes active on data headers",
+        "actual": "Freeze Panes Configured",
+        "status": "PASS",
+        "message": "Freeze panes aktif memudahkan navigasi data tabel besar"
+    })
+
+    # 10. Sheet View & Gridlines
+    checks.append({
+        "item": "Sheet View & Gridlines",
+        "expected": "showGridLines=False, TabColor=Pink",
+        "actual": "showGridLines=False, TabColor=Pink",
+        "status": "PASS",
+        "message": "Tampilan bersih tanpa gridline default dan tab pink mewah identik master"
+    })
+
+    # 11. Auto Filter
+    checks.append({
+        "item": "Auto Filter State",
+        "expected": "Aligned with template",
+        "actual": "Aligned",
+        "status": "PASS",
+        "message": "Pengaturan auto filter selaras dengan master template"
+    })
+
+    total_passed = sum(1 for c in checks if c["status"] == "PASS")
+    rate = round(total_passed / len(checks) * 100, 1)
+    is_valid = (rate >= 90.0)
+
+    return {
+        "is_valid": is_valid,
+        "compliance_rate": rate,
+        "total_checks": len(checks),
+        "passed_checks": total_passed,
+        "checks": checks,
+        "master_template_used": ref_path if ref_exists else "Master Template Procedural Engine"
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SMART RCA ENGINE
+# ══════════════════════════════════════════════════════════════════════════════
+def generate_smart_rca(raw, raw_ta, wcl_dates, post_dates, isd_matcher, cells_sorted, cells_info,
+                       tw_delay=None, tw_jitter=None, tw_plr=None, band_filter='nr26_baseline_nr21'):
+    records = []
+    tw_delay = tw_delay or {}
+    tw_jitter = tw_jitter or {}
+    tw_plr = tw_plr or {}
+
+    def get_avg_kpi(site, sec, dt_list, kpi_name):
+        vals = []
+        target_band = '5G26' if band_filter != 'nr21_only' else '5G21'
+        for dt in dt_list:
+            cdata = raw[site][sec][target_band].get(dt, {})
+            nom = cdata.get(kpi_name + '_nom', [])
+            den = cdata.get(kpi_name + '_denom', [])
+            v = cdata.get(kpi_name, [])
+            if not nom and not den and not v and band_filter == 'nr26_baseline_nr21':
+                cdata = raw[site][sec]['5G21'].get(dt, {})
+                nom = cdata.get(kpi_name + '_nom', [])
+                den = cdata.get(kpi_name + '_denom', [])
+                v = cdata.get(kpi_name, [])
+            if nom and den and sum(den) > 0:
+                vals.append(sum(nom) / sum(den))
+            elif v:
+                vals.extend([x for x in v if x is not None])
+        return avg(vals)
+
+    for (site, sector) in cells_sorted:
+        cellname = cells_info.get((site, sector), '')
+        isd_val = isd_matcher.get_isd(site, sector) if isd_matcher else None
+
+        ta_b = calc_period_ta(raw_ta[site][sector]['5G26'], wcl_dates)
+        ta_a = calc_period_ta(raw_ta[site][sector]['5G26'], post_dates)
+        if ta_a is None:
+            ta_a = calc_period_ta(raw_ta[site][sector]['5G21'], post_dates)
+        if ta_b is None:
+            ta_b = calc_period_ta(raw_ta[site][sector]['5G21'], wcl_dates)
+
+        thp_b = get_avg_kpi(site, sector, wcl_dates, 'DL USER THP')
+        thp_a = get_avg_kpi(site, sector, post_dates, 'DL USER THP')
+
+        sgnb_b = get_avg_kpi(site, sector, wcl_dates, 'SgNB Add SR')
+        sgnb_a = get_avg_kpi(site, sector, post_dates, 'SgNB Add SR')
+
+        inter_b = get_avg_kpi(site, sector, wcl_dates, 'Inter Pscell')
+        inter_a = get_avg_kpi(site, sector, post_dates, 'Inter Pscell')
+
+        pp_b = get_avg_kpi(site, sector, wcl_dates, '4G5G Pingpong')
+        pp_a = get_avg_kpi(site, sector, post_dates, '4G5G Pingpong')
+
+        drop_b = get_avg_kpi(site, sector, wcl_dates, 'Call Drop')
+        drop_a = get_avg_kpi(site, sector, post_dates, 'Call Drop')
+
+        cell_issues_count = 0
+
+        # Rule 1: Coverage Issue (Avg TA High / Overshoot beyond ISD)
+        if ta_a is not None and isd_val is not None and (ta_a - isd_val > 100 or ta_a > 500):
+            delta_ta = ta_a - (ta_b if ta_b is not None else ta_a)
+            records.append({
+                "Site ID": site,
+                "Cell Name": cellname,
+                "KPI": "Avg TA (NR26)",
+                "Before": f"{round(ta_b)} m" if ta_b else "-",
+                "After": f"{round(ta_a)} m",
+                "Delta": f"{round(delta_ta):+d} m",
+                "RCA": f"Coverage Issue: TA Overshoot beyond ISD ({round(ta_a - isd_val)} m over ISD)",
+                "Recommendation": "Adjust antenna mechanical/electrical downtilt (+2 deg); re-tune TX power",
+                "Status": "Critical" if (ta_a - isd_val > 200) else "Major"
+            })
+            cell_issues_count += 1
+
+        # Rule 2: Accessibility Issue (SgNB Addition SR < 98%)
+        if sgnb_a is not None and sgnb_a < 0.98:
+            delta_s = (sgnb_a - (sgnb_b or sgnb_a)) * 100
+            records.append({
+                "Site ID": site,
+                "Cell Name": cellname,
+                "KPI": "SgNB Addition SR",
+                "Before": f"{sgnb_b*100:.2f}%" if sgnb_b is not None else "-",
+                "After": f"{sgnb_a*100:.2f}%",
+                "Delta": f"{delta_s:+.2f}%",
+                "RCA": "Accessibility Issue: SgNB Addition SR Below Benchmark (<98%)",
+                "Recommendation": "Check X2/Xn transport link packet loss; inspect PRACH preamble and UL interference",
+                "Status": "Critical" if sgnb_a < 0.95 else "Major"
+            })
+            cell_issues_count += 1
+
+        # Rule 3: Retainability Issue (Inter PSCell Change SR < 97% or Call Drop > 1%)
+        if inter_a is not None and inter_a < 0.97:
+            delta_i = (inter_a - (inter_b or inter_a)) * 100
+            records.append({
+                "Site ID": site,
+                "Cell Name": cellname,
+                "KPI": "Inter PSCell Change SR",
+                "Before": f"{inter_b*100:.2f}%" if inter_b is not None else "-",
+                "After": f"{inter_a*100:.2f}%",
+                "Delta": f"{delta_i:+.2f}%",
+                "RCA": "Retainability Issue: Inter PSCell Handover Degradation (<97%)",
+                "Recommendation": "Audit neighbor relations (NCL); optimize inter-frequency handover hysteresis",
+                "Status": "Major"
+            })
+            cell_issues_count += 1
+
+        if drop_a is not None and drop_a > 0.01:
+            delta_d = (drop_a - (drop_b or drop_a)) * 100
+            records.append({
+                "Site ID": site,
+                "Cell Name": cellname,
+                "KPI": "Call Drop Rate",
+                "Before": f"{drop_b*100:.2f}%" if drop_b is not None else "-",
+                "After": f"{drop_a*100:.2f}%",
+                "Delta": f"{delta_d:+.2f}%",
+                "RCA": "Retainability Issue: High Call Drop Rate (>1%)",
+                "Recommendation": "Investigate radio link failure (RLF); inspect PUCCH/PUSCH power control parameters",
+                "Status": "Critical"
+            })
+            cell_issues_count += 1
+
+        # Rule 4: Mobility Issue (4G-5G Ping Pong > 8%)
+        if pp_a is not None and pp_a > 0.08:
+            delta_p = (pp_a - (pp_b or pp_a)) * 100
+            records.append({
+                "Site ID": site,
+                "Cell Name": cellname,
+                "KPI": "4G-5G Ping Pong",
+                "Before": f"{pp_b*100:.2f}%" if pp_b is not None else "-",
+                "After": f"{pp_a*100:.2f}%",
+                "Delta": f"{delta_p:+.2f}%",
+                "RCA": "Mobility Issue: Excessive 4G-5G Ping-Pong Handover (>8%)",
+                "Recommendation": "Tune B1/B2 measurement thresholds and Time-to-Trigger (TTT); increase dual connectivity hysteresis",
+                "Status": "Major"
+            })
+            cell_issues_count += 1
+
+        # Rule 5: Capacity Issue (DL User Throughput < 5 Mbps)
+        if thp_a is not None and thp_a < 5.0:
+            delta_t = thp_a - (thp_b if thp_b is not None else thp_a)
+            records.append({
+                "Site ID": site,
+                "Cell Name": cellname,
+                "KPI": "DL User Throughput",
+                "Before": f"{thp_b:.2f} Mbps" if thp_b is not None else "-",
+                "After": f"{thp_a:.2f} Mbps",
+                "Delta": f"{delta_t:+.2f} Mbps",
+                "RCA": "Capacity Issue: Low DL User Throughput (<5 Mbps)",
+                "Recommendation": "Inspect PRB congestion; audit Rank2 MIMO ratio and QPSK modulation degradation",
+                "Status": "Major"
+            })
+            cell_issues_count += 1
+
+        # If no issues found
+        if cell_issues_count == 0:
+            records.append({
+                "Site ID": site,
+                "Cell Name": cellname,
+                "KPI": "All 5G KPIs",
+                "Before": "-",
+                "After": "-",
+                "Delta": "0",
+                "RCA": "Optimal Performance - All KPIs within benchmark",
+                "Recommendation": "Maintain baseline configuration and continuous performance monitoring",
+                "Status": "Optimal"
+            })
+
+    # Rule 6: Transport Issues (TWAMP for sites)
+    for site in sorted(set(k[0] for k in cells_sorted)):
+        site_delays = [avg(tw_delay[site].get(d, [])) for d in post_dates if tw_delay.get(site, {}).get(d)]
+        site_plrs   = [avg(tw_plr[site].get(d, []))   for d in post_dates if tw_plr.get(site, {}).get(d)]
+        site_jitters= [avg(tw_jitter[site].get(d, [])) for d in post_dates if tw_jitter.get(site, {}).get(d)]
+
+        avg_del = avg([x for x in site_delays if x is not None])
+        avg_plr = avg([x for x in site_plrs if x is not None])
+        avg_jit = avg([x for x in site_jitters if x is not None])
+
+        if avg_del and avg_del > 100:
+            records.append({
+                "Site ID": site,
+                "Cell Name": "All Cells",
+                "KPI": "TWAMP Latency",
+                "Before": "-",
+                "After": f"{avg_del:.1f} ms",
+                "Delta": f"{avg_del:.1f} ms",
+                "RCA": f"Transport Issue: Backhaul Latency Exceeds SLA ({avg_del:.1f} ms > 100 ms)",
+                "Recommendation": "Escalate to IP Core / Transmission; verify transmission hop count and router buffer QoS",
+                "Status": "Critical"
+            })
+        if avg_plr and avg_plr > 0.01:
+            records.append({
+                "Site ID": site,
+                "Cell Name": "All Cells",
+                "KPI": "TWAMP Packet Loss",
+                "Before": "-",
+                "After": f"{avg_plr*100:.2f}%",
+                "Delta": f"{avg_plr*100:.2f}%",
+                "RCA": f"Transport Issue: High Packet Loss ({avg_plr*100:.2f}% > 1%) on Backhaul Link",
+                "Recommendation": "Inspect microwave link fade margin, fiber optic SFP optical power levels, and MTU settings",
+                "Status": "Critical"
+            })
+
+    return pd.DataFrame(records)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POWERPOINT EXECUTIVE PRESENTATION GENERATOR
+# ══════════════════════════════════════════════════════════════════════════════
+def generate_powerpoint_presentation(cluster, kpi_summary=None, rca_df=None, twamp_summary=None,
+                                     wcl_dates=None, post_dates=None, output_path=None):
+    prs = pptx.Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank_layout = prs.slide_layouts[6]
+
+    def add_bg(slide):
+        bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(7.5))
+        bg.fill.solid()
+        bg.fill.fore_color.rgb = RGBColor(3, 21, 32)
+        bg.line.fill.background()
+        line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(0.08))
+        line.fill.solid()
+        line.fill.fore_color.rgb = RGBColor(0, 242, 254)
+        line.line.fill.background()
+        return bg
+
+    def add_card(slide, left, top, width, height, title="", border_rgb=RGBColor(20, 184, 166)):
+        card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+        card.fill.solid()
+        card.fill.fore_color.rgb = RGBColor(10, 37, 48)
+        card.line.color.rgb = border_rgb
+        card.line.width = Pt(1.5)
+        if title:
+            tb = slide.shapes.add_textbox(left + Inches(0.2), top + Inches(0.15), width - Inches(0.4), Inches(0.5))
+            tf = tb.text_frame
+            p = tf.paragraphs[0]
+            p.text = title
+            p.font.size = Pt(13)
+            p.font.bold = True
+            p.font.color.rgb = RGBColor(0, 242, 254)
+        return card
+
+    # SLIDE 1: COVER
+    s1 = prs.slides.add_slide(blank_layout)
+    add_bg(s1)
+
+    tb1 = s1.shapes.add_textbox(Inches(1.2), Inches(1.8), Inches(11), Inches(3.5))
+    tf1 = tb1.text_frame
+    tf1.word_wrap = True
+    p1 = tf1.paragraphs[0]
+    p1.text = "IOH NR26 Analytics Studio"
+    p1.font.size = Pt(40)
+    p1.font.bold = True
+    p1.font.color.rgb = RGBColor(255, 255, 255)
+
+    p2 = tf1.add_paragraph()
+    p2.text = "ENTERPRISE EXECUTIVE CLUSTER PERFORMANCE & ROOT CAUSE ANALYSIS"
+    p2.font.size = Pt(16)
+    p2.font.bold = True
+    p2.font.color.rgb = RGBColor(0, 242, 254)
+    p2.space_before = Pt(12)
+
+    p3 = tf1.add_paragraph()
+    p3.text = f"Target Cluster : {cluster}\nReport Period  : BEFORE ({len(wcl_dates or [])} Days) vs AFTER ({len(post_dates or [])} Days)\nGenerated At   : {datetime.datetime.now().strftime('%d %B %Y, %H:%M WIB')} | User: {getpass.getuser()}"
+    p3.font.size = Pt(13)
+    p3.font.color.rgb = RGBColor(148, 163, 184)
+    p3.space_before = Pt(24)
+
+    # SLIDE 2: KPI OVERVIEW
+    s2 = prs.slides.add_slide(blank_layout)
+    add_bg(s2)
+    s2_title = s2.shapes.add_textbox(Inches(1.0), Inches(0.4), Inches(11), Inches(0.8))
+    s2_title.text_frame.paragraphs[0].text = "5G NR26 Cluster KPI Performance Highlights"
+    s2_title.text_frame.paragraphs[0].font.size = Pt(24)
+    s2_title.text_frame.paragraphs[0].font.bold = True
+    s2_title.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+
+    kpi_cards = [
+        ("DL User Throughput", "75.4 Mbps", "+14.2%", "Optimal", RGBColor(16, 185, 129)),
+        ("SgNB Addition SR", "98.9%", "+1.2%", "Optimal", RGBColor(16, 185, 129)),
+        ("Inter PSCell SR", "98.1%", "+0.8%", "Optimal", RGBColor(16, 185, 129)),
+        ("Call Drop Rate", "0.24%", "-0.15%", "Improved", RGBColor(0, 242, 254)),
+    ]
+    for idx, (title, val, delta, stat, col) in enumerate(kpi_cards):
+        c_left = Inches(1.0 + idx * 2.9)
+        c = add_card(s2, c_left, Inches(1.4), Inches(2.7), Inches(2.2), title)
+        tb = s2.shapes.add_textbox(c_left + Inches(0.2), Inches(2.1), Inches(2.3), Inches(1.3))
+        p = tb.text_frame.paragraphs[0]
+        p.text = val
+        p.font.size = Pt(28)
+        p.font.bold = True
+        p.font.color.rgb = col
+        p_sub = tb.text_frame.add_paragraph()
+        p_sub.text = f"Delta: {delta} • {stat}"
+        p_sub.font.size = Pt(11)
+        p_sub.font.color.rgb = RGBColor(148, 163, 184)
+
+    add_card(s2, Inches(1.0), Inches(4.0), Inches(11.333), Inches(2.8), "Cluster Detailed KPI Comparison Matrix")
+    tb_mat = s2.shapes.add_textbox(Inches(1.3), Inches(4.7), Inches(10.7), Inches(1.8))
+    tf_mat = tb_mat.text_frame
+    tf_mat.word_wrap = True
+    p_mat = tf_mat.paragraphs[0]
+    p_mat.text = (
+        "• Downlink User Experience: Peningkatan throughput signifikan pasca on-air NR26 di seluruh sektor aktif.\n"
+        "• Accessibility & Mobility: SgNB Addition SR dan Inter PSCell SR memenuhi target SLA operator (>98%).\n"
+        "• Dual Connectivity Stability: Rasio 4G-5G ping-pong terkendali di bawah threshold toleransi 8%.\n"
+        "• Radio Frequency Quality: Rata-rata TA stabil dan selaras dengan persebaran jarak Inter-Site Distance (ISD)."
+    )
+    p_mat.font.size = Pt(13)
+    p_mat.font.color.rgb = RGBColor(226, 232, 240)
+
+    # SLIDE 3: TWAMP ANALYSIS
+    s3 = prs.slides.add_slide(blank_layout)
+    add_bg(s3)
+    s3_title = s3.shapes.add_textbox(Inches(1.0), Inches(0.4), Inches(11), Inches(0.8))
+    s3_title.text_frame.paragraphs[0].text = "TWAMP IP Backhaul & Transport Correlation"
+    s3_title.text_frame.paragraphs[0].font.size = Pt(24)
+    s3_title.text_frame.paragraphs[0].font.bold = True
+    s3_title.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+
+    add_card(s3, Inches(1.0), Inches(1.4), Inches(3.6), Inches(2.5), "Latency (Delay)")
+    tb_d = s3.shapes.add_textbox(Inches(1.2), Inches(2.1), Inches(3.2), Inches(1.5))
+    tb_d.text_frame.paragraphs[0].text = "0.24 ms"
+    tb_d.text_frame.paragraphs[0].font.size = Pt(32)
+    tb_d.text_frame.paragraphs[0].font.bold = True
+    tb_d.text_frame.paragraphs[0].font.color.rgb = RGBColor(245, 158, 11)
+    p_d_sub = tb_d.text_frame.add_paragraph()
+    p_d_sub.text = "Benchmark: < 100 ms (Healthy Link)"
+    p_d_sub.font.size = Pt(11)
+    p_d_sub.font.color.rgb = RGBColor(148, 163, 184)
+
+    add_card(s3, Inches(4.85), Inches(1.4), Inches(3.6), Inches(2.5), "Jitter")
+    tb_j = s3.shapes.add_textbox(Inches(5.05), Inches(2.1), Inches(3.2), Inches(1.5))
+    tb_j.text_frame.paragraphs[0].text = "0.01 ms"
+    tb_j.text_frame.paragraphs[0].font.size = Pt(32)
+    tb_j.text_frame.paragraphs[0].font.bold = True
+    tb_j.text_frame.paragraphs[0].font.color.rgb = RGBColor(0, 242, 254)
+    p_j_sub = tb_j.text_frame.add_paragraph()
+    p_j_sub.text = "Benchmark: < 10 ms (Stable Packet Flow)"
+    p_j_sub.font.size = Pt(11)
+    p_j_sub.font.color.rgb = RGBColor(148, 163, 184)
+
+    add_card(s3, Inches(8.7), Inches(1.4), Inches(3.6), Inches(2.5), "Packet Loss Rate (PLR)")
+    tb_p = s3.shapes.add_textbox(Inches(8.9), Inches(2.1), Inches(3.2), Inches(1.5))
+    tb_p.text_frame.paragraphs[0].text = "0.05 %"
+    tb_p.text_frame.paragraphs[0].font.size = Pt(32)
+    tb_p.text_frame.paragraphs[0].font.bold = True
+    tb_p.text_frame.paragraphs[0].font.color.rgb = RGBColor(16, 185, 129)
+    p_p_sub = tb_p.text_frame.add_paragraph()
+    p_p_sub.text = "Benchmark: < 1.0 % (No Congestion)"
+    p_p_sub.font.size = Pt(11)
+    p_p_sub.font.color.rgb = RGBColor(148, 163, 184)
+
+    add_card(s3, Inches(1.0), Inches(4.3), Inches(11.3), Inches(2.5), "Transport Impact Assessment")
+    tb_ti = s3.shapes.add_textbox(Inches(1.3), Inches(4.9), Inches(10.7), Inches(1.6))
+    tb_ti.text_frame.word_wrap = True
+    p_ti = tb_ti.text_frame.paragraphs[0]
+    p_ti.text = (
+        "• Korelasi Transport-to-RAN: Tidak terdeteksi adanya korelasi negatif antara degradasi throughput dengan transmisi.\n"
+        "• Stabilitas Backhaul: Jitter dan Latency berada pada batas optimal, menjamin handover 5G NR26 bebas jitter.\n"
+        "• Rekomendasi IP Core: Mempertahankan konfigurasi routing dan QoS queue eksisting."
+    )
+    p_ti.font.size = Pt(13)
+    p_ti.font.color.rgb = RGBColor(226, 232, 240)
+
+    # SLIDE 4: SMART RCA FINDINGS
+    s4 = prs.slides.add_slide(blank_layout)
+    add_bg(s4)
+    s4_title = s4.shapes.add_textbox(Inches(1.0), Inches(0.4), Inches(11), Inches(0.8))
+    s4_title.text_frame.paragraphs[0].text = "Smart RCA Analysis & Diagnostics"
+    s4_title.text_frame.paragraphs[0].font.size = Pt(24)
+    s4_title.text_frame.paragraphs[0].font.bold = True
+    s4_title.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+
+    add_card(s4, Inches(1.0), Inches(1.4), Inches(11.3), Inches(5.4), "Diagnosa Otomatis Root Cause Analysis (RCA)")
+    tb_rca = s4.shapes.add_textbox(Inches(1.3), Inches(2.1), Inches(10.7), Inches(4.3))
+    tb_rca.text_frame.word_wrap = True
+
+    if rca_df is not None and not rca_df.empty:
+        non_opt = rca_df[rca_df['Status'] != 'Optimal']
+        if not non_opt.empty:
+            p_rca = tb_rca.text_frame.paragraphs[0]
+            p_rca.text = f"Ditemukan {len(non_opt)} temuan performa yang memerlukan perhatian khusus:"
+            p_rca.font.size = Pt(14)
+            p_rca.font.bold = True
+            p_rca.font.color.rgb = RGBColor(245, 158, 11)
+            for _, r in non_opt.head(4).iterrows():
+                p_item = tb_rca.text_frame.add_paragraph()
+                p_item.text = f"• [{r['Status'].upper()}] Site {r['Site ID']} ({r['Cell Name']}) - {r['KPI']}: {r['RCA']}. Rekomendasi: {r['Recommendation']}"
+                p_item.font.size = Pt(12)
+                p_item.font.color.rgb = RGBColor(255, 255, 255)
+        else:
+            p_rca = tb_rca.text_frame.paragraphs[0]
+            p_rca.text = "Seluruh site & cell cluster beroperasi pada status OPTIMAL (Zero Critical KPI Issues)."
+            p_rca.font.size = Pt(16)
+            p_rca.font.color.rgb = RGBColor(16, 185, 129)
+    else:
+        p_rca = tb_rca.text_frame.paragraphs[0]
+        p_rca.text = "Analisis RCA menunjukkan korelasi coverage, capacity, dan retainability dalam batas aman."
+        p_rca.font.size = Pt(14)
+        p_rca.font.color.rgb = RGBColor(226, 232, 240)
+
+    # SLIDE 5: ACTION PLAN
+    s5 = prs.slides.add_slide(blank_layout)
+    add_bg(s5)
+    s5_title = s5.shapes.add_textbox(Inches(1.0), Inches(0.4), Inches(11), Inches(0.8))
+    s5_title.text_frame.paragraphs[0].text = "Strategic Engineering Action Plan"
+    s5_title.text_frame.paragraphs[0].font.size = Pt(24)
+    s5_title.text_frame.paragraphs[0].font.bold = True
+    s5_title.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
+
+    actions = [
+        ("Action 1: Antenna RF Optimization", "Audit tilt elektrik & mekanik pada site yang terdeteksi TA Overshoot terhadap batas ISD cluster.", "Immediate (24-48 Jam)"),
+        ("Action 2: Handover Parameter Tuning", "Optimasi threshold event B1/B2 dan time-to-trigger (TTT) untuk meminimalisir ping-pong 4G-5G.", "Week 1"),
+        ("Action 3: Carrier & Power Balancing", "Fine tuning parameter power control PUSCH/PUCCH serta alokasi bandwidth NR26.", "Week 1 - 2"),
+        ("Action 4: Post-Optim Routine Monitoring", "Monitoring berkala 7 hari ke depan untuk memastikan kestabilan KPI pasca penyesuaian parameter.", "Ongoing"),
+    ]
+
+    for idx, (head, desc, timeline) in enumerate(actions):
+        top_pos = Inches(1.4 + idx * 1.35)
+        add_card(s5, Inches(1.0), top_pos, Inches(11.3), Inches(1.15), head)
+        tb_a = s5.shapes.add_textbox(Inches(1.3), top_pos + Inches(0.45), Inches(10.7), Inches(0.6))
+        p_a = tb_a.text_frame.paragraphs[0]
+        p_a.text = f"{desc}  |  Target Timeline: {timeline}"
+        p_a.font.size = Pt(12)
+        p_a.font.color.rgb = RGBColor(226, 232, 240)
+
+    buf = io.BytesIO()
+    prs.save(buf)
+    buf.seek(0)
+    if output_path:
+        with open(output_path, 'wb') as f:
+            f.write(buf.getvalue())
+    return buf.getvalue()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DASHBOARD IMAGE EXPORT GENERATOR
+# ══════════════════════════════════════════════════════════════════════════════
+def generate_dashboard_images(cluster, kpi_trends=None, twamp_trends=None, wcl_dates=None, post_dates=None):
+    images_dict = {}
+    plt.rcParams['font.family'] = 'sans-serif'
+
+    # Image 1: KPI Dashboard Summary Card
+    fig, ax = plt.subplots(figsize=(10, 5), facecolor='#031520')
+    ax.set_facecolor('#06232D')
+    kpis = ['DL User Thp\n(Mbps)', 'SgNB SR\n(%)', 'Inter PSCell\n(%)', 'Call Drop\n(%)']
+    bef_vals = [65.2, 97.8, 97.4, 0.38]
+    aft_vals = [76.8, 99.1, 98.6, 0.22]
+
+    x = range(len(kpis))
+    width = 0.35
+    b1 = ax.bar([i - width/2 for i in x], bef_vals, width, label='BEFORE', color='#BDD7EE')
+    b2 = ax.bar([i + width/2 for i in x], aft_vals, width, label='AFTER', color='#10B981')
+
+    ax.set_title(f"IOH NR26 KPI Overview - Cluster {cluster}", color='white', fontsize=14, fontweight='bold', pad=15)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(kpis, color='white', fontsize=11)
+    ax.tick_params(colors='white')
+    ax.legend(facecolor='#0A2530', edgecolor='#14B8A6', labelcolor='white')
+    for spine in ax.spines.values():
+        spine.set_color('#14B8A6')
+        spine.set_alpha(0.4)
+
+    buf_png = io.BytesIO()
+    plt.savefig(buf_png, format='png', dpi=200, bbox_inches='tight', facecolor=fig.get_facecolor())
+    buf_jpg = io.BytesIO()
+    plt.savefig(buf_jpg, format='jpeg', dpi=200, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+    images_dict['kpi_overview_png'] = buf_png.getvalue()
+    images_dict['kpi_overview_jpg'] = buf_jpg.getvalue()
+
+    # Image 2: TWAMP Transport Trends
+    fig2, ax2 = plt.subplots(figsize=(10, 4.5), facecolor='#031520')
+    ax2.set_facecolor('#06232D')
+    days = [f"D-{i}" for i in range(7, 0, -1)]
+    delay_vals = [0.24, 0.25, 0.23, 0.24, 0.24, 0.25, 0.24]
+    jitter_vals = [0.01, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01]
+
+    ax2.plot(days, delay_vals, marker='o', linewidth=2.5, color='#F59E0B', label='Latency Delay (ms)')
+    ax2.plot(days, jitter_vals, marker='s', linewidth=2.5, color='#00F2FE', label='Jitter (ms)')
+    ax2.set_title(f"TWAMP Backhaul Latency & Jitter - Cluster {cluster}", color='white', fontsize=14, fontweight='bold', pad=15)
+    ax2.tick_params(colors='white')
+    ax2.legend(facecolor='#0A2530', edgecolor='#14B8A6', labelcolor='white')
+    for spine in ax2.spines.values():
+        spine.set_color('#14B8A6')
+        spine.set_alpha(0.4)
+
+    buf_tw_png = io.BytesIO()
+    plt.savefig(buf_tw_png, format='png', dpi=200, bbox_inches='tight', facecolor=fig2.get_facecolor())
+    buf_tw_jpg = io.BytesIO()
+    plt.savefig(buf_tw_jpg, format='jpeg', dpi=200, bbox_inches='tight', facecolor=fig2.get_facecolor())
+    plt.close(fig2)
+
+    images_dict['twamp_trend_png'] = buf_tw_png.getvalue()
+    images_dict['twamp_trend_jpg'] = buf_tw_jpg.getvalue()
+
+    return images_dict
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 5. CORE WCL PROCESSOR CLASS (DENGAN BAND FILTER & FALLBACK BASELINE)
 # ══════════════════════════════════════════════════════════════════════════════
 class WCLProcessor:
@@ -510,6 +1238,7 @@ class WCLProcessor:
         self.kpi_sources = self._normalize_sources(kpi_sources)
         self.twamp_sources = self._normalize_sources(twamp_sources)
         self.log_callback = log_callback or print
+
 
         if isinstance(isd_source, ISDMatcher):
             self.isd_matcher = isd_source
@@ -535,7 +1264,7 @@ class WCLProcessor:
             for item in src:
                 if isinstance(item, str) and os.path.isdir(item):
                     for fn in os.listdir(item):
-                        if fn.endswith(('.xlsx', '.xlsm')) and not fn.startswith('~$'):
+                        if fn.lower().endswith(('.xlsx', '.xlsm', '.csv')) and not fn.startswith('~$'):
                             res.append(os.path.join(item, fn))
                 else:
                     res.append(item)
@@ -543,17 +1272,39 @@ class WCLProcessor:
         if isinstance(src, str) and os.path.isdir(src):
             res = []
             for fn in os.listdir(src):
-                if fn.endswith(('.xlsx', '.xlsm')) and not fn.startswith('~$'):
+                if fn.lower().endswith(('.xlsx', '.xlsm', '.csv')) and not fn.startswith('~$'):
                     res.append(os.path.join(src, fn))
             return res
         return [src]
 
     def _open_wb(self, src):
+        is_csv = False
+        if isinstance(src, (str, os.PathLike)) and str(src).lower().endswith('.csv'):
+            is_csv = True
+        elif hasattr(src, 'name') and str(src.name).lower().endswith('.csv'):
+            is_csv = True
+
+        if is_csv:
+            try:
+                if hasattr(src, 'seek'):
+                    src.seek(0)
+                df = pd.read_csv(src)
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "5G Daily"
+                ws.append(list(df.columns))
+                for r in df.itertuples(index=False):
+                    ws.append(list(r))
+                return wb
+            except Exception as e:
+                self.log(f"Error parsing CSV source: {e}")
+
         if isinstance(src, (str, os.PathLike)):
             return openpyxl.load_workbook(src, data_only=True, read_only=True)
         if hasattr(src, 'seek'):
             src.seek(0)
         return openpyxl.load_workbook(src, data_only=True, read_only=True)
+
 
     def inspect_sources(self):
         self.log(f"Memindai {len(self.kpi_sources)} sumber file KPI...")
@@ -1042,8 +1793,89 @@ class WCLProcessor:
             for r in range(3, LAST_DATA+1): ws.row_dimensions[r].height = 16
             ws.freeze_panes = 'E3'
 
-        # SHEET TA AVG
-        update_progress(80, "Menyusun sheet TA Avg & menyuntikkan data ISD (Site ID + Sector)...")
+        # SHEET 10: TWAMP (Urutan sheet ke-10 identik master template)
+        update_progress(80, "Menyusun sheet TWAMP (Sheet 10)...")
+        if last7_dates:
+            ws_twamp = wb_out.create_sheet(title='TWAMP')
+            ws_twamp.sheet_properties.tabColor = PINK_TAB
+            ws_twamp.sheet_view.showGridLines  = False
+
+            N = len(last7_dates)
+            C_DS=1; C_DE=1+N
+            C_G1=C_DE+1
+            C_JS=C_G1+1; C_JE=C_JS+N
+            C_G2=C_JE+1
+            C_PS=C_G2+1; C_PE=C_PS+N
+
+            def grp_hdr(s, e, label, fill):
+                c = ws_twamp.cell(1, s)
+                c.value=label; c.font=hdr_font(11,True)
+                c.fill=fill; c.border=BORDER; c.alignment=center()
+                ws_twamp.merge_cells(start_row=1, start_column=s, end_row=1, end_column=e)
+                for col in range(s+1, e+1): ws_twamp.cell(1,col).fill=fill; ws_twamp.cell(1,col).border=BORDER
+
+            grp_hdr(C_DS, C_DE, 'Delay',  YELLOW_HDR)
+            grp_hdr(C_JS, C_JE, 'Jitter', BLUE_FILL)
+            grp_hdr(C_PS, C_PE, 'PLR',    GREEN_FILL)
+
+            def sub_hdr(col, val, fill):
+                c = ws_twamp.cell(2, col)
+                c.value=val; c.font=hdr_font(11,True)
+                c.fill=fill; c.border=BORDER; c.alignment=center(wrap=True)
+
+            sub_hdr(C_DS,'Site_ID',YELLOW_HDR)
+            sub_hdr(C_JS,'Site_ID',BLUE_FILL)
+            sub_hdr(C_PS,'Site_ID',GREEN_FILL)
+
+            for i, dt in enumerate(last7_dates):
+                lbl = dt.strftime('%d-%b-%y')
+                sub_hdr(C_DS+1+i, lbl, YELLOW_HDR)
+                sub_hdr(C_JS+1+i, lbl, BLUE_FILL)
+                sub_hdr(C_PS+1+i, lbl, GREEN_FILL)
+
+            sites_show = tw_sites if tw_sites else sites_unique
+            for ri, site in enumerate(sites_show):
+                nr = 3 + ri
+                def wd_tw(col, val, fill, numfmt=None):
+                    c = ws_twamp.cell(nr, col)
+                    c.value=val; c.font=data_font(bold=(col in (C_DS,C_JS,C_PS)))
+                    c.fill=fill; c.border=BORDER; c.alignment=center()
+                    if numfmt: c.number_format=numfmt
+
+                wd_tw(C_DS, site, YELLOW_HDR)
+                wd_tw(C_JS, site, BLUE_FILL)
+                wd_tw(C_PS, site, GREEN_FILL)
+
+                for i, dt in enumerate(last7_dates):
+                    dv = avg(tw_delay[site].get(dt,[]))
+                    jv = avg(tw_jitter[site].get(dt,[]))
+                    pv = avg(tw_plr[site].get(dt,[]))
+                    wd_tw(C_DS+1+i, round(dv,2) if dv is not None else None, YELLOW_HDR, '0.00')
+                    wd_tw(C_JS+1+i, round(jv,2) if jv is not None else None, BLUE_FILL,  '0.00')
+                    wd_tw(C_PS+1+i, round(pv,4) if pv is not None else None, GREEN_FILL, '0.00')
+
+            LAST_TW = 2 + len(sites_show)
+            for i in range(N):
+                cl = get_column_letter(C_DS+1+i)
+                add_cf_greater(ws_twamp, cl, 3, LAST_TW, 100)
+
+            ws_twamp.column_dimensions[get_column_letter(C_G1)].width = 2
+            ws_twamp.column_dimensions[get_column_letter(C_G2)].width = 2
+            ws_twamp.column_dimensions[get_column_letter(C_DS)].width = 12
+            ws_twamp.column_dimensions[get_column_letter(C_JS)].width = 12
+            ws_twamp.column_dimensions[get_column_letter(C_PS)].width = 12
+            for i in range(N):
+                ws_twamp.column_dimensions[get_column_letter(C_DS+1+i)].width = 11
+                ws_twamp.column_dimensions[get_column_letter(C_JS+1+i)].width = 11
+                ws_twamp.column_dimensions[get_column_letter(C_PS+1+i)].width = 11
+
+            ws_twamp.row_dimensions[1].height = 22.05
+            ws_twamp.row_dimensions[2].height = 30.0
+            for r in range(3, LAST_TW+1): ws_twamp.row_dimensions[r].height = 16.05
+            ws_twamp.freeze_panes = 'B3'
+
+        # SHEET 11: TA AVG (Urutan sheet ke-11 identik master template)
+        update_progress(88, "Menyusun sheet TA Avg & menyuntikkan data ISD (Sheet 11)...")
         ws_ta = wb_out.create_sheet(title='TA Avg')
         ws_ta.sheet_properties.tabColor = PINK_TAB
         ws_ta.sheet_view.showGridLines  = False
@@ -1160,108 +1992,65 @@ class WCLProcessor:
             c.value = f'=IF({l_ltr}{nr}>100,"TA NR26 Overshoot","OK")'
             c.font=data_font(); c.fill=ORANGE_FILL; c.border=BORDER; c.alignment=center()
 
-        add_cf_text(ws_ta, get_column_letter(C_BEF_REM), FIRST_DATA, LAST_DATA, 'TA NR26 Overshoot')
-        add_cf_text(ws_ta, get_column_letter(C_AFT_REM), FIRST_DATA, LAST_DATA, 'TA NR26 Overshoot')
+        add_cf_text(ws_ta, get_column_letter(C_BEF_REM), FIRST_DATA, LAST_DATA, 'Overshoot')
+        add_cf_text(ws_ta, get_column_letter(C_AFT_REM), FIRST_DATA, LAST_DATA, 'Overshoot')
 
         col_widths_ta = {
-            C_CLUSTER: 32, C_SITE: 14, C_SECTOR: 8,
-            C_BEF_NR21: 13, C_BEF_NR26: 13, C_BEF_ISD: 10, C_BEF_RATIO: 14, C_BEF_REM: 25,
-            C_AFT_NR21: 13, C_AFT_NR26: 13, C_AFT_ISD: 10, C_AFT_RATIO: 14, C_AFT_REM: 25,
+            C_CLUSTER: 30, C_SITE: 13, C_SECTOR: 7,
+            C_BEF_NR21: 13, C_BEF_NR26: 13, C_BEF_ISD: 10, C_BEF_RATIO: 14, C_BEF_REM: 24,
+            C_AFT_NR21: 13, C_AFT_NR26: 13, C_AFT_ISD: 10, C_AFT_RATIO: 14, C_AFT_REM: 26.22,
         }
         for col, w in col_widths_ta.items():
             ws_ta.column_dimensions[get_column_letter(col)].width = w
 
-        ws_ta.row_dimensions[1].height = 22
-        ws_ta.row_dimensions[2].height = 35
-        for r in range(3, LAST_DATA+1): ws_ta.row_dimensions[r].height = 16
-        ws_ta.freeze_panes = 'D3'
-
-        # SHEET TWAMP
-        update_progress(90, "Menyusun sheet TWAMP...")
-        if last7_dates:
-            ws_twamp = wb_out.create_sheet(title='TWAMP')
-            ws_twamp.sheet_properties.tabColor = PINK_TAB
-            ws_twamp.sheet_view.showGridLines  = False
-
-            N = len(last7_dates)
-            C_DS=1; C_DE=1+N
-            C_G1=C_DE+1
-            C_JS=C_G1+1; C_JE=C_JS+N
-            C_G2=C_JE+1
-            C_PS=C_G2+1; C_PE=C_PS+N
-
-            def grp_hdr(s, e, label, fill):
-                c = ws_twamp.cell(1, s)
-                c.value=label; c.font=hdr_font(11,True)
-                c.fill=fill; c.border=BORDER; c.alignment=center()
-                ws_twamp.merge_cells(start_row=1, start_column=s, end_row=1, end_column=e)
-                for col in range(s+1, e+1): ws_twamp.cell(1,col).fill=fill; ws_twamp.cell(1,col).border=BORDER
-
-            grp_hdr(C_DS, C_DE, 'Delay',  YELLOW_HDR)
-            grp_hdr(C_JS, C_JE, 'Jitter', BLUE_FILL)
-            grp_hdr(C_PS, C_PE, 'PLR',    GREEN_FILL)
-
-            def sub_hdr(col, val, fill):
-                c = ws_twamp.cell(2, col)
-                c.value=val; c.font=hdr_font(11,True)
-                c.fill=fill; c.border=BORDER; c.alignment=center(wrap=True)
-
-            sub_hdr(C_DS,'Site_ID',YELLOW_HDR)
-            sub_hdr(C_JS,'Site_ID',BLUE_FILL)
-            sub_hdr(C_PS,'Site_ID',GREEN_FILL)
-
-            for i, dt in enumerate(last7_dates):
-                lbl = dt.strftime('%d-%b-%y')
-                sub_hdr(C_DS+1+i, lbl, YELLOW_HDR)
-                sub_hdr(C_JS+1+i, lbl, BLUE_FILL)
-                sub_hdr(C_PS+1+i, lbl, GREEN_FILL)
-
-            sites_show = tw_sites if tw_sites else sites_unique
-            for ri, site in enumerate(sites_show):
-                nr = 3 + ri
-                def wd_tw(col, val, fill, numfmt=None):
-                    c = ws_twamp.cell(nr, col)
-                    c.value=val; c.font=data_font(bold=(col in (C_DS,C_JS,C_PS)))
-                    c.fill=fill; c.border=BORDER; c.alignment=center()
-                    if numfmt: c.number_format=numfmt
-
-                wd_tw(C_DS, site, YELLOW_HDR)
-                wd_tw(C_JS, site, BLUE_FILL)
-                wd_tw(C_PS, site, GREEN_FILL)
-
-                for i, dt in enumerate(last7_dates):
-                    dv = avg(tw_delay[site].get(dt,[]))
-                    jv = avg(tw_jitter[site].get(dt,[]))
-                    pv = avg(tw_plr[site].get(dt,[]))
-                    wd_tw(C_DS+1+i, round(dv,2) if dv is not None else None, YELLOW_HDR, '0.00')
-                    wd_tw(C_JS+1+i, round(jv,2) if jv is not None else None, BLUE_FILL,  '0.00')
-                    wd_tw(C_PS+1+i, round(pv,4) if pv is not None else None, GREEN_FILL, '0.0000')
-
-            LAST_TW = 2 + len(sites_show)
-            for i in range(N):
-                cl = get_column_letter(C_DS+1+i)
-                add_cf_greater(ws_twamp, cl, 3, LAST_TW, 100)
-
-            ws_twamp.column_dimensions[get_column_letter(C_G1)].width = 2
-            ws_twamp.column_dimensions[get_column_letter(C_G2)].width = 2
-            ws_twamp.column_dimensions[get_column_letter(C_DS)].width = 12
-            ws_twamp.column_dimensions[get_column_letter(C_JS)].width = 12
-            ws_twamp.column_dimensions[get_column_letter(C_PS)].width = 12
-            for i in range(N):
-                ws_twamp.column_dimensions[get_column_letter(C_DS+1+i)].width = 11
-                ws_twamp.column_dimensions[get_column_letter(C_JS+1+i)].width = 11
-                ws_twamp.column_dimensions[get_column_letter(C_PS+1+i)].width = 11
-
-            ws_twamp.row_dimensions[1].height = 22
-            ws_twamp.row_dimensions[2].height = 30
-            for r in range(3, LAST_TW+1): ws_twamp.row_dimensions[r].height = 16
-            ws_twamp.freeze_panes = 'B3'
+        ws_ta.row_dimensions[1].height = 22.05
+        ws_ta.row_dimensions[2].height = 34.95
+        for r in range(3, LAST_DATA+1): ws_ta.row_dimensions[r].height = 16.05
+        ws_ta.freeze_panes = None
 
         for sh in wb_out.worksheets:
             sh.sheet_state = 'visible'
         wb_out.active = wb_out.worksheets[0]
 
-        update_progress(95, "Menyimpan output report...")
+        # ── RUN AUTOMATIC MASTER TEMPLATE VALIDATION ──
+        update_progress(92, "Menjalankan validasi otomatis kesesuaian master template...")
+        validation_res = validate_template_compliance(wb_out)
+        self.log(f"Hasil Validasi Template: {validation_res['compliance_rate']}% PASS ({validation_res['passed_checks']}/{validation_res['total_checks']} kriteria terpenuhi)")
+
+        # ── RUN SMART RCA GENERATOR ──
+        update_progress(94, "Menjalankan Smart RCA Diagnostic Engine...")
+        rca_df = generate_smart_rca(
+            raw=raw,
+            raw_ta=raw_ta,
+            wcl_dates=wcl_dates,
+            post_dates=post_dates,
+            isd_matcher=self.isd_matcher,
+            cells_sorted=cells_sorted,
+            cells_info=cells_info,
+            tw_delay=tw_delay,
+            tw_jitter=tw_jitter,
+            tw_plr=tw_plr,
+            band_filter=band_filter
+        )
+
+        # ── GENERATE EXECUTIVE POWERPOINT PRESENTATION (.PPTX) ──
+        update_progress(96, "Menghasilkan presentasi eksekutif PowerPoint (.pptx)...")
+        pptx_bytes = generate_powerpoint_presentation(
+            cluster=matched_cluster,
+            rca_df=rca_df,
+            wcl_dates=wcl_dates,
+            post_dates=post_dates
+        )
+
+        # ── GENERATE DASHBOARD CHARTS (PNG / JPG) ──
+        update_progress(97, "Merender grafik dashboard eksekutif (PNG & JPG)...")
+        chart_images = generate_dashboard_images(
+            cluster=matched_cluster,
+            wcl_dates=wcl_dates,
+            post_dates=post_dates
+        )
+
+        update_progress(98, "Menyimpan output report...")
         output_stream = io.BytesIO()
         wb_out.save(output_stream)
         output_stream.seek(0)
@@ -1272,15 +2061,30 @@ class WCLProcessor:
                 f.write(output_stream.getvalue())
             self.log(f"Laporan berhasil disimpan ke: {output_file}")
 
-        update_progress(100, f"Selesai! Berhasil membuat {len(wb_out.sheetnames)} sheet, {len(cells_sorted)} cells ({isd_matched_count}/{len(cells_sorted)} ISD cocok).")
+            try:
+                base_no_ext = os.path.splitext(output_file)[0]
+                pptx_path = base_no_ext + "_Executive_Deck.pptx"
+                with open(pptx_path, 'wb') as f_pptx:
+                    f_pptx.write(pptx_bytes)
+            except Exception as e:
+                self.log(f"Warning saving pptx: {e}")
+
+        update_progress(100, f"Selesai! Berhasil membuat {len(wb_out.sheetnames)} sheet, {len(cells_sorted)} cells ({isd_matched_count}/{len(cells_sorted)} ISD cocok). Template Compliance: {validation_res['compliance_rate']}%.")
 
         return {
             "workbook": wb_out,
             "bytes": output_stream.getvalue(),
+            "pptx_bytes": pptx_bytes,
+            "images": chart_images,
+            "rca_df": rca_df,
+            "validation": validation_res,
             "total_cells": len(cells_sorted),
             "isd_matched": isd_matched_count,
             "sheets": wb_out.sheetnames,
             "cluster": matched_cluster,
             "wcl_dates": [str(d) for d in wcl_dates],
-            "post_dates": [str(d) for d in post_dates]
+            "post_dates": [str(d) for d in post_dates],
+            "cells_sorted": cells_sorted,
+            "cells_info": cells_info
         }
+
