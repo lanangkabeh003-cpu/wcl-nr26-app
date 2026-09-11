@@ -641,7 +641,11 @@ class WCLProcessor:
         candidates = get_close_matches(target_cluster, self.clusters, n=1, cutoff=0.5)
         return candidates[0] if candidates else target_cluster
 
-    def get_cluster_cells_preview(self, target_cluster, site_filter=None, band_filter='nr26_baseline_nr21'):
+    def get_cluster_cells_preview(self, target_cluster, site_filter=None, band_filter='nr26_baseline_nr21', *args, **kwargs):
+        if 'band_filter' in kwargs:
+            band_filter = kwargs['band_filter']
+        elif 'band' in kwargs:
+            band_filter = kwargs['band']
         matched_cl = self._match_cluster_name(target_cluster)
         site_filter_set = set(str(s).strip() for s in site_filter) if site_filter else None
         
@@ -714,11 +718,15 @@ class WCLProcessor:
                         before_dates=None, before_range=None,
                         after_dates=None, after_range=None,
                         twamp_dates=None, twamp_range=None,
-                        output_file=None, progress_callback=None):
+                        output_file=None, progress_callback=None, *args, **kwargs):
         """
         Menghasilkan laporan Excel WCL NR26.
         Mendukung Band Filter cerdas (NR26 + Baseline NR21).
         """
+        if 'band_filter' in kwargs:
+            band_filter = kwargs['band_filter']
+        elif 'band' in kwargs:
+            band_filter = kwargs['band']
         def update_progress(pct, msg):
             self.log(msg)
             if progress_callback:

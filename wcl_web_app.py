@@ -10,9 +10,12 @@ import os
 import io
 import socket
 import datetime
+import importlib
 import pandas as pd
 import streamlit as st
 
+import wcl_processor
+importlib.reload(wcl_processor)
 from wcl_processor import WCLProcessor, ISDMatcher, resolve_custom_dates, parse_date_val
 
 # ── Konfigurasi Halaman Streamlit ─────────────────────────────────────────────
@@ -474,7 +477,20 @@ target_cluster = st.session_state.selected_cluster
 
 if proc and target_cluster:
     try:
-        cells_preview = proc.get_cluster_cells_preview(target_cluster, site_filter=site_filter, band_filter=band_mode)
+        try:
+            cells_preview = proc.get_cluster_cells_preview(target_cluster, site_filter=site_filter, band_filter=band_mode)
+        except TypeError:
+            # Re-instantiate proc with fresh class in case of stale cache
+            import importlib
+            import wcl_processor
+            importlib.reload(wcl_processor)
+            proc = wcl_processor.WCLProcessor(kpi_sources=proc.kpi_sources, twamp_sources=proc.twamp_sources)
+            st.session_state.kpi_processor = proc
+            try:
+                cells_preview = proc.get_cluster_cells_preview(target_cluster, site_filter=site_filter, band_filter=band_mode)
+            except TypeError:
+                cells_preview = proc.get_cluster_cells_preview(target_cluster, site_filter=site_filter)
+
         matcher = st.session_state.isd_matcher
         preview_df = matcher.match_preview(cells_preview)
 
@@ -528,16 +544,34 @@ if btn_generate:
 
         try:
             proc.isd_matcher = st.session_state.isd_matcher
-            res = proc.generate_report(
-                target_cluster=target_cluster,
-                site_filter=site_filter,
-                band_filter=band_mode,
-                before_dates=bef_d,
-                after_dates=aft_d,
-                twamp_dates=tw_d,
-                output_file=out_fpath,
-                progress_callback=progress_cb
-            )
+            try:
+                res = proc.generate_report(
+                    target_cluster=target_cluster,
+                    site_filter=site_filter,
+                    band_filter=band_mode,
+                    before_dates=bef_d,
+                    after_dates=aft_d,
+                    twamp_dates=tw_d,
+                    output_file=out_fpath,
+                    progress_callback=progress_cb
+                )
+            except TypeError:
+                import importlib
+                import wcl_processor
+                importlib.reload(wcl_processor)
+                proc = wcl_processor.WCLProcessor(kpi_sources=proc.kpi_sources, twamp_sources=proc.twamp_sources)
+                proc.isd_matcher = st.session_state.isd_matcher
+                st.session_state.kpi_processor = proc
+                res = proc.generate_report(
+                    target_cluster=target_cluster,
+                    site_filter=site_filter,
+                    band_filter=band_mode,
+                    before_dates=bef_d,
+                    after_dates=aft_d,
+                    twamp_dates=tw_d,
+                    output_file=out_fpath,
+                    progress_callback=progress_cb
+                )
 
             st.session_state.generated_report = res
             st.balloons()
