@@ -124,9 +124,11 @@ class ISDMatcher:
             for k, v in data_source.items():
                 if v is None or pd.isna(v):
                     continue
+                raw_v = str(v).replace(',', '.').strip()
+                raw_v_clean = re.sub(r'[^\d.]', '', raw_v)
                 try:
-                    num_val = float(v)
-                    if 0 < num_val < 15:
+                    num_val = float(raw_v_clean)
+                    if 'km' in raw_v.lower() or (0 < num_val < 15):
                         num_val = num_val * 1000.0
                     num_val = int(round(num_val))
                 except (ValueError, TypeError):
@@ -227,14 +229,17 @@ class ISDMatcher:
         for _, row in df.iterrows():
             if isd_col not in row or pd.isna(row[isd_col]):
                 continue
+            raw_v = str(row[isd_col]).replace(',', '.').strip()
+            # Bersihkan karakter teks selain angka dan titik (misal 'km', 'm', spasi)
+            raw_v_clean = re.sub(r'[^\d.]', '', raw_v)
             try:
-                isd_val = float(row[isd_col])
+                isd_val = float(raw_v_clean)
             except (ValueError, TypeError):
                 continue
 
-            # Konversi otomatis km (0.xxxx atau < 15) menjadi meter (dikalikan 1000)
+            # Konversi otomatis km (format 0.xxxx atau < 15 atau terdapat unit 'km') menjadi meter (x 1000)
             dist_unit = str(row.get('Distance_Unit', '')).strip().lower()
-            if dist_unit == 'km' or (0 < isd_val < 15):
+            if dist_unit == 'km' or 'km' in raw_v.lower() or (0 < isd_val < 15):
                 isd_val = isd_val * 1000.0
             isd_val = int(round(isd_val))
 
@@ -1526,6 +1531,9 @@ class WCLProcessor:
             self.log(f"Memuat data ISD default dari: {DEFAULT_ISD_PATH}")
             self.isd_matcher = ISDMatcher(DEFAULT_ISD_PATH)
 
+        if 'twamp_sources' in kwargs and kwargs['twamp_sources']:
+            self.twamp_sources = kwargs['twamp_sources']
+
         if 'band_filter' in kwargs:
             band_filter = kwargs['band_filter']
         elif 'band' in kwargs:
@@ -1858,6 +1866,13 @@ class WCLProcessor:
 
         # SHEET 10: TWAMP (Urutan sheet ke-10 identik master template)
         update_progress(80, "Menyusun sheet TWAMP (Sheet 10)...")
+        if not last7_dates:
+            # Fallback cerdas ke 7 tanggal KPI terakhir agar sheet ke-10 TWAMP PASTI SELALU DIBUAT
+            if all_dates:
+                last7_dates = all_dates[-7:] if len(all_dates) >= 7 else all_dates
+            elif post_dates:
+                last7_dates = post_dates
+
         if last7_dates:
             ws_twamp = wb_out.create_sheet(title='TWAMP')
             ws_twamp.sheet_properties.tabColor = PINK_TAB

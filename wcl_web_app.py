@@ -328,6 +328,9 @@ with st.sidebar:
         tw_up = st.file_uploader("Upload TWAMP (.xlsx, .xlsm, .csv):", type=["xlsx", "xlsm", "csv"], accept_multiple_files=True)
         if tw_up:
             twamp_sources = list(tw_up)
+            st.session_state.twamp_sources = twamp_sources
+            if st.session_state.get('kpi_processor'):
+                st.session_state.kpi_processor.twamp_sources = twamp_sources
             st.caption(f"✅ {len(twamp_sources)} file TWAMP diupload.")
     elif twamp_choice == "Path Lokal":
         tw_in = st.text_input("Path File/Folder TWAMP:", value=def_tw if has_local_tw else "")
@@ -336,12 +339,23 @@ with st.sidebar:
                 tw_files = [os.path.join(tw_in, f) for f in os.listdir(tw_in)
                             if f.lower().endswith(('.xlsx', '.xlsm', '.csv')) and not f.startswith('~$')]
                 twamp_sources = tw_files
+                st.session_state.twamp_sources = twamp_sources
+                if st.session_state.get('kpi_processor'):
+                    st.session_state.kpi_processor.twamp_sources = twamp_sources
                 st.caption(f"📁 Folder TWAMP: {len(tw_files)} file ditemukan.")
             else:
                 twamp_sources = [tw_in]
+                st.session_state.twamp_sources = twamp_sources
+                if st.session_state.get('kpi_processor'):
+                    st.session_state.kpi_processor.twamp_sources = twamp_sources
                 st.caption(f"📄 File TWAMP ({round(os.path.getsize(tw_in)/1024, 1)} KB)")
         elif tw_in:
             st.error("❌ Path TWAMP tidak ditemukan!")
+    elif twamp_choice == "Internal Sheet 'twamp'":
+        st.session_state.twamp_sources = None
+        if st.session_state.get('kpi_processor'):
+            st.session_state.kpi_processor.twamp_sources = None
+        st.caption("ℹ️ Membaca sheet internal 'twamp' dari file KPI.")
 
     st.markdown("---")
     if kpi_sources:
@@ -521,6 +535,11 @@ with st.expander("📝 Pengaturan Data ISD (Buka untuk Ubah / Paste)", expanded=
             except Exception as e:
                 st.error(f"Format error: {e}")
 
+    if st.session_state.get('isd_matcher') and st.session_state.isd_matcher.mapping:
+        sample_items = list(st.session_state.isd_matcher.mapping.items())[:5]
+        sample_str = " • ".join([f"**{k[0]} Sec {k[1]}**: `{v} m`" for k, v in sample_items])
+        st.markdown(f'<div style="background:#F0FDF4;border:1px solid #BBF7D0;padding:8px 14px;border-radius:8px;font-size:12px;color:#166534;margin-top:8px;">📏 <b>Sampel ISD Termuat (Otomatis Meter):</b> {sample_str}</div>', unsafe_allow_html=True)
+
 # Live Preview
 proc = st.session_state.kpi_processor
 target_cluster = st.session_state.selected_cluster
@@ -573,6 +592,8 @@ if btn_run:
 
         try:
             sync_isd_to_processor(proc, st.session_state.isd_matcher)
+            if st.session_state.get('twamp_sources'):
+                proc.twamp_sources = st.session_state.twamp_sources
 
             gen_kwargs = {
                 'target_cluster': target_cluster,
@@ -589,6 +610,8 @@ if btn_run:
                 sig = inspect.signature(proc.generate_report)
                 if 'isd_matcher' in sig.parameters:
                     gen_kwargs['isd_matcher'] = st.session_state.isd_matcher
+                if 'twamp_sources' in sig.parameters:
+                    gen_kwargs['twamp_sources'] = st.session_state.get('twamp_sources')
 
             res = proc.generate_report(**gen_kwargs)
             st.session_state.generated_report = res
