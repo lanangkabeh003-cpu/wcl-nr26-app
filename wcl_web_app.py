@@ -392,11 +392,24 @@ c_top1, c_top2 = st.columns([1.2, 1.8])
 
 with c_top1:
     clusters = meta.get('clusters', []) if meta else []
-    if clusters:
+    has_real_clusters = bool(clusters and clusters != ["ALL_SITES"])
+
+    if has_real_clusters:
         sel_cluster = st.selectbox("Cluster Target:", options=clusters, index=0)
         st.session_state.selected_cluster = sel_cluster
     else:
-        st.selectbox("Cluster Target:", ["(Muat sumber data di sidebar terlebih dahulu)"], disabled=True)
+        # Jika raw data KPI tidak memiliki kolom cluster
+        cur_cl = st.session_state.get('selected_cluster', '')
+        if not cur_cl or cur_cl == "ALL_SITES":
+            cur_cl = "JAKARTA SELATAN_02_N06_A" if any("12JKS" in str(s) for s in meta.get('sites', [])) else "WCL_NR26_REPORT"
+        user_cl_input = st.text_input(
+            "🏷️ Nama Laporan / Cluster:",
+            value=cur_cl,
+            help="File KPI tidak memuat kolom cluster. Berikan nama laporan, dan sistem akan memproses data berdasarkan Site ID yang dimasukkan di sebelah kanan."
+        )
+        sel_cluster = user_cl_input.strip() if user_cl_input.strip() else "ALL_SITES"
+        st.session_state.selected_cluster = sel_cluster
+        st.caption("ℹ️ *Mode Site ID Active (Kolom Cluster tidak ada di raw KPI)*")
 
     band_opts = {
         "🌟 NR26 Baseline NR21 (Otomatis fallback ke NR21 jika Before belum On-Air)": "nr26_baseline_nr21",
@@ -410,9 +423,9 @@ with c_top1:
 with c_top2:
     # ── SITE ID BATCH FILTER (WAJIB) ──
     batch_raw = st.text_area(
-        "SITE ID BATCH FILTER (Paste dari Excel):",
+        "🎯 SITE ID BATCH FILTER (Paste dari Excel):",
         value=st.session_state.batch_sites_text,
-        placeholder="11TGR0316\n11TGR0320\n11TGR0325\natau pisahkan koma/titik-koma",
+        placeholder="12JKS0755\n12JKS0764\n12JKS0780\natau pisahkan baris baru / koma",
         height=85
     )
     st.session_state.batch_sites_text = batch_raw
@@ -421,8 +434,10 @@ with c_top2:
 
     if parsed_sites:
         st.markdown(f'<span style="background:#ECFDF5;color:#15803D;border:1.5px solid #86EFAC;padding:4px 12px;border-radius:15px;font-size:12px;font-weight:700;">✓ Total Site Filter: {len(parsed_sites)} Site Aktif</span>', unsafe_allow_html=True)
+    elif not has_real_clusters:
+        st.markdown('<span style="background:#FEF3C7;color:#92400E;border:1.5px solid #FCD34D;padding:4px 12px;border-radius:15px;font-size:12px;font-weight:700;">ℹ️ Masukkan Site ID target di atas (atau biarkan kosong untuk semua site di file)</span>', unsafe_allow_html=True)
     else:
-        st.caption("ℹ️ Memproses seluruh site dalam cluster.")
+        st.caption("ℹ️ Memproses seluruh site dalam cluster terpilih.")
 
 # ── 7. PANEL 2: RENTANG TANGGAL (3 KOLOM) ─────────────────────────────────────
 st.markdown("""
@@ -574,8 +589,11 @@ with c_dir:
 
 if btn_run:
     if not proc or not target_cluster:
-        st.error("Pilih data sumber dan cluster target terlebih dahulu!")
+        st.error("Pilih data sumber terlebih dahulu!")
     else:
+        import time
+        gen_start_time = time.time()
+
         bef_d = st.session_state.bef_dates_final
         aft_d = st.session_state.aft_dates_final
         tw_d = st.session_state.tw_dates_final
@@ -584,8 +602,9 @@ if btn_run:
         p_status = st.empty()
 
         def on_prog(pct, msg):
+            elapsed_sec = round(time.time() - gen_start_time, 1)
             p_bar.progress(pct)
-            p_status.caption(f"Status: {msg}")
+            p_status.markdown(f"⏱️ **{elapsed_sec}s** — {msg}")
 
         out_fname = f"WCL NR26 {target_cluster}_GEMOY.xlsx"
         out_fpath = os.path.join(save_folder, out_fname) if (save_folder and os.path.exists(save_folder)) else None
@@ -614,8 +633,10 @@ if btn_run:
                     gen_kwargs['twamp_sources'] = st.session_state.get('twamp_sources')
 
             res = proc.generate_report(**gen_kwargs)
+            gen_duration = round(time.time() - gen_start_time, 2)
+            st.session_state.gen_duration = gen_duration
             st.session_state.generated_report = res
-            st.success(f"🎉 Selesai! Berhasil membuat 11 sheet ({res['total_cells']} cells). Master Template Match: 100%.")
+            st.success(f"🎉 **Selesai dalam {gen_duration} detik** ({round(gen_duration/60, 2)} menit)! Berhasil membuat 11 sheet ({res['total_cells']} cells). Master Template Match: 100%.")
         except Exception as e:
             st.error(f"Gagal memproses laporan: {e}")
 
@@ -623,6 +644,8 @@ if btn_run:
 res_data = st.session_state.generated_report
 if res_data and res_data.get('bytes'):
     st.markdown("---")
+    if 'gen_duration' in st.session_state:
+        st.markdown(f'<div style="background:#F0FDF4;border:1.5px solid #86EFAC;color:#15803D;padding:6px 14px;border-radius:10px;font-weight:800;font-size:13px;display:inline-block;margin-bottom:12px;">⚡ Waktu Proses: {st.session_state.gen_duration} detik</div>', unsafe_allow_html=True)
     dl1, dl2 = st.columns([1.5, 1.5])
     
     with dl1:

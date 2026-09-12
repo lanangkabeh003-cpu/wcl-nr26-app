@@ -175,17 +175,30 @@ class ISDMatcher:
         cols = [str(c).strip() for c in df.columns]
         col_map = {c.lower(): c for c in cols}
 
-        # 1. Deteksi kolom ISD
+        # 1. Deteksi kolom ISD (Mencari Average of Distance, Distance, ISD, Jarak, dll.)
         if not isd_col:
-            for candidate in ['isd', 'isd (m)', 'isd m', 'isd_m', 'isd(m)', 'average of distance', 'distance', 'distance_m', 'jarak']:
+            isd_candidates = [
+                'average of distance', 'average of dist', 'average distance', 'avg distance', 'avg dist',
+                'isd (m)', 'isd m', 'isd_m', 'isd(m)', 'isd_meter', 'isd (meter)', 'isd',
+                'distance_m', 'distance (m)', 'distance(m)', 'distance', 'dist_m', 'dist',
+                'jarak_m', 'jarak (m)', 'jarak', '1st_tier_dist', '1st_tier_distance', 'tier_distance', 'tier_dist'
+            ]
+            for candidate in isd_candidates:
                 for c_low, orig in col_map.items():
-                    if candidate in c_low:
+                    # Jangan pilih kolom yang merupakan satuan/unit (misal 'Distance_Unit')
+                    if any(ex in c_low for ex in ['unit', 'satuan', 'type', 'status', 'tier_sector', 'tier_sec']):
+                        continue
+                    if candidate == c_low or candidate in c_low:
                         isd_col = orig
                         break
                 if isd_col:
                     break
+
         if not isd_col:
             for c in reversed(df.columns):
+                c_l = str(c).lower()
+                if any(ex in c_l for ex in ['unit', 'satuan', 'type', 'status', 'tier_sector', 'sec']):
+                    continue
                 if pd.api.types.is_numeric_dtype(df[c]):
                     isd_col = c
                     break
@@ -211,12 +224,12 @@ class ISDMatcher:
                 if site_col:
                     break
 
-        # 4. Deteksi kolom Combined
+        # 4. Deteksi kolom Combined (misal 'Site_sec', 'Cellname')
         if not combined_col:
-            for candidate in ['site_sector', 'combined', 'site sector', 'cellname', 'cell name', 'cell']:
+            for candidate in ['site_sec', 'site_sector', 'combined', 'site sector', 'cellname', 'cell name', 'cell']:
                 for c_low, orig in col_map.items():
                     if orig != isd_col:
-                        if candidate in c_low:
+                        if candidate == c_low or candidate in c_low:
                             combined_col = orig
                             break
                 if combined_col:
@@ -277,6 +290,15 @@ class ISDMatcher:
                 else:
                     clean_c = str(comb_val).strip().upper()
                     self.string_mapping[clean_c] = isd_val
+
+            # Index langsung kolom Site_sec jika ada (misal '12JKS0755_1')
+            for ss_cand in ['Site_sec', 'site_sec', 'sitesec', 'cell_sec']:
+                if ss_cand in row and not pd.isna(row[ss_cand]):
+                    clean_ss = str(row[ss_cand]).strip().upper()
+                    self.string_mapping[clean_ss] = isd_val
+                    m_ss = re.match(r'^([A-Z0-9]+)[_\-\s]+(\d+)$', clean_ss)
+                    if m_ss:
+                        self.mapping[(m_ss.group(1), int(m_ss.group(2)))] = isd_val
 
     def get_isd(self, site, sector=None):
         clean_site = self.normalize_site(site)
@@ -1392,7 +1414,10 @@ class WCLProcessor:
             except Exception as e:
                 self.log(f"  [Peringatan] Gagal memindai salah satu sumber KPI: {e}")
 
-        self.clusters = sorted(list(cluster_set))
+        if not cluster_set:
+            self.clusters = ["ALL_SITES"]
+        else:
+            self.clusters = sorted(list(cluster_set))
         self.available_dates = sorted(list(date_set))
         self.all_sites = sorted(list(site_set))
 
@@ -1431,16 +1456,18 @@ class WCLProcessor:
         }
 
     def _match_cluster_name(self, target_cluster):
-        if not self.clusters:
-            self.inspect_sources()
-        target_upper = target_cluster.upper()
+        if not target_cluster:
+            return "ALL_SITES"
+        if not self.clusters or self.clusters == ["ALL_SITES"]:
+            return target_cluster
+        target_upper = str(target_cluster).upper()
         for cl in sorted(self.clusters):
             cl_upper = cl.upper()
             if cl_upper == target_upper or target_upper.startswith(cl_upper) or cl_upper.startswith(target_upper):
                 return cl
         from difflib import get_close_matches
-        candidates = get_close_matches(target_cluster, self.clusters, n=1, cutoff=0.5)
-        return candidates[0] if candidates else target_cluster
+        candidates = get_close_matches(str(target_cluster), self.clusters, n=1, cutoff=0.5)
+        return candidates[0] if candidates else str(target_cluster)
 
     def get_cluster_cells_preview(self, target_cluster, site_filter=None, band_filter='nr26_baseline_nr21', *args, **kwargs):
         if 'band_filter' in kwargs:
@@ -1470,8 +1497,9 @@ class WCLProcessor:
                 i_band    = find_header_index(hdrs, ['band', 'band_name'])
 
                 for row in ws5g.iter_rows(values_only=True):
-                    if i_cluster is not None and row[i_cluster] != matched_cl:
-                        continue
+                    if i_cluster is not None and matched_cl not in ('ALL_SITES', 'CUSTOM_REPORT', 'DEFAULT_CLUSTER') and str(matched_cl).strip():
+                        if row[i_cluster] and str(row[i_cluster]).strip().upper() != str(matched_cl).strip().upper():
+                            continue
                     site = row[i_site] if i_site is not None else None
                     sector = row[i_sector] if i_sector is not None else None
                     cell = row[i_cellname] if i_cellname is not None else None
@@ -1587,8 +1615,9 @@ class WCLProcessor:
                 i_ta_avg   = find_header_index(hdrs, TA_AVG_CANDIDATES)
 
                 for row in ws5g.iter_rows(values_only=True):
-                    if i_cluster is not None and row[i_cluster] != matched_cluster:
-                        continue
+                    if i_cluster is not None and matched_cluster not in ('ALL_SITES', 'CUSTOM_REPORT', 'DEFAULT_CLUSTER') and str(matched_cluster).strip():
+                        if row[i_cluster] and str(row[i_cluster]).strip().upper() != str(matched_cluster).strip().upper():
+                            continue
                     date   = row[i_date] if i_date is not None else None
                     site   = row[i_site] if i_site is not None else None
                     sector = row[i_sector] if i_sector is not None else None
@@ -1864,93 +1893,97 @@ class WCLProcessor:
             for r in range(3, LAST_DATA+1): ws.row_dimensions[r].height = 16
             ws.freeze_panes = 'E3'
 
-        # SHEET 10: TWAMP (Urutan sheet ke-10 identik master template)
+        # SHEET 10: TWAMP (Urutan sheet ke-10 identik master template - WAJIB SELALU DIBUAT)
         update_progress(80, "Menyusun sheet TWAMP (Sheet 10)...")
+        ws_twamp = wb_out.create_sheet(title='TWAMP')
+        ws_twamp.sheet_properties.tabColor = PINK_TAB
+        ws_twamp.sheet_view.showGridLines  = False
+
         if not last7_dates:
             # Fallback cerdas ke 7 tanggal KPI terakhir agar sheet ke-10 TWAMP PASTI SELALU DIBUAT
             if all_dates:
                 last7_dates = all_dates[-7:] if len(all_dates) >= 7 else all_dates
             elif post_dates:
                 last7_dates = post_dates
+            elif wcl_dates:
+                last7_dates = wcl_dates
+            else:
+                today = datetime.date.today()
+                last7_dates = [today - datetime.timedelta(days=6-i) for i in range(7)]
 
-        if last7_dates:
-            ws_twamp = wb_out.create_sheet(title='TWAMP')
-            ws_twamp.sheet_properties.tabColor = PINK_TAB
-            ws_twamp.sheet_view.showGridLines  = False
+        N = len(last7_dates)
+        C_DS=1; C_DE=1+N
+        C_G1=C_DE+1
+        C_JS=C_G1+1; C_JE=C_JS+N
+        C_G2=C_JE+1
+        C_PS=C_G2+1; C_PE=C_PS+N
 
-            N = len(last7_dates)
-            C_DS=1; C_DE=1+N
-            C_G1=C_DE+1
-            C_JS=C_G1+1; C_JE=C_JS+N
-            C_G2=C_JE+1
-            C_PS=C_G2+1; C_PE=C_PS+N
+        def grp_hdr(s, e, label, fill):
+            c = ws_twamp.cell(1, s)
+            c.value=label; c.font=hdr_font(11,True)
+            c.fill=fill; c.border=BORDER; c.alignment=center()
+            ws_twamp.merge_cells(start_row=1, start_column=s, end_row=1, end_column=e)
+            for col in range(s+1, e+1): ws_twamp.cell(1,col).fill=fill; ws_twamp.cell(1,col).border=BORDER
 
-            def grp_hdr(s, e, label, fill):
-                c = ws_twamp.cell(1, s)
-                c.value=label; c.font=hdr_font(11,True)
+        grp_hdr(C_DS, C_DE, 'Delay',  YELLOW_HDR)
+        grp_hdr(C_JS, C_JE, 'Jitter', BLUE_FILL)
+        grp_hdr(C_PS, C_PE, 'PLR',    GREEN_FILL)
+
+        def sub_hdr(col, val, fill):
+            c = ws_twamp.cell(2, col)
+            c.value=val; c.font=hdr_font(11,True)
+            c.fill=fill; c.border=BORDER; c.alignment=center(wrap=True)
+
+        sub_hdr(C_DS,'Site_ID',YELLOW_HDR)
+        sub_hdr(C_JS,'Site_ID',BLUE_FILL)
+        sub_hdr(C_PS,'Site_ID',GREEN_FILL)
+
+        for i, dt in enumerate(last7_dates):
+            lbl = dt.strftime('%d-%b-%y') if isinstance(dt, (datetime.date, datetime.datetime)) else str(dt)
+            sub_hdr(C_DS+1+i, lbl, YELLOW_HDR)
+            sub_hdr(C_JS+1+i, lbl, BLUE_FILL)
+            sub_hdr(C_PS+1+i, lbl, GREEN_FILL)
+
+        sites_show = sorted(list(sites_unique)) if sites_unique else sorted(list(tw_sites))
+        for ri, site in enumerate(sites_show):
+            nr = 3 + ri
+            def wd_tw(col, val, fill, numfmt=None):
+                c = ws_twamp.cell(nr, col)
+                c.value=val; c.font=data_font(bold=(col in (C_DS,C_JS,C_PS)))
                 c.fill=fill; c.border=BORDER; c.alignment=center()
-                ws_twamp.merge_cells(start_row=1, start_column=s, end_row=1, end_column=e)
-                for col in range(s+1, e+1): ws_twamp.cell(1,col).fill=fill; ws_twamp.cell(1,col).border=BORDER
+                if numfmt: c.number_format=numfmt
 
-            grp_hdr(C_DS, C_DE, 'Delay',  YELLOW_HDR)
-            grp_hdr(C_JS, C_JE, 'Jitter', BLUE_FILL)
-            grp_hdr(C_PS, C_PE, 'PLR',    GREEN_FILL)
-
-            def sub_hdr(col, val, fill):
-                c = ws_twamp.cell(2, col)
-                c.value=val; c.font=hdr_font(11,True)
-                c.fill=fill; c.border=BORDER; c.alignment=center(wrap=True)
-
-            sub_hdr(C_DS,'Site_ID',YELLOW_HDR)
-            sub_hdr(C_JS,'Site_ID',BLUE_FILL)
-            sub_hdr(C_PS,'Site_ID',GREEN_FILL)
+            wd_tw(C_DS, site, YELLOW_HDR)
+            wd_tw(C_JS, site, BLUE_FILL)
+            wd_tw(C_PS, site, GREEN_FILL)
 
             for i, dt in enumerate(last7_dates):
-                lbl = dt.strftime('%d-%b-%y')
-                sub_hdr(C_DS+1+i, lbl, YELLOW_HDR)
-                sub_hdr(C_JS+1+i, lbl, BLUE_FILL)
-                sub_hdr(C_PS+1+i, lbl, GREEN_FILL)
+                dv = avg(tw_delay[site].get(dt,[]))
+                jv = avg(tw_jitter[site].get(dt,[]))
+                pv = avg(tw_plr[site].get(dt,[]))
+                wd_tw(C_DS+1+i, round(dv,2) if dv is not None else None, YELLOW_HDR, '0.00')
+                wd_tw(C_JS+1+i, round(jv,2) if jv is not None else None, BLUE_FILL,  '0.00')
+                wd_tw(C_PS+1+i, round(pv,4) if pv is not None else None, GREEN_FILL, '0.00')
 
-            sites_show = sorted(list(sites_unique)) if sites_unique else sorted(list(tw_sites))
-            for ri, site in enumerate(sites_show):
-                nr = 3 + ri
-                def wd_tw(col, val, fill, numfmt=None):
-                    c = ws_twamp.cell(nr, col)
-                    c.value=val; c.font=data_font(bold=(col in (C_DS,C_JS,C_PS)))
-                    c.fill=fill; c.border=BORDER; c.alignment=center()
-                    if numfmt: c.number_format=numfmt
+        LAST_TW = 2 + len(sites_show)
+        for i in range(N):
+            cl = get_column_letter(C_DS+1+i)
+            add_cf_greater(ws_twamp, cl, 3, LAST_TW, 100)
 
-                wd_tw(C_DS, site, YELLOW_HDR)
-                wd_tw(C_JS, site, BLUE_FILL)
-                wd_tw(C_PS, site, GREEN_FILL)
+        ws_twamp.column_dimensions[get_column_letter(C_G1)].width = 2
+        ws_twamp.column_dimensions[get_column_letter(C_G2)].width = 2
+        ws_twamp.column_dimensions[get_column_letter(C_DS)].width = 12
+        ws_twamp.column_dimensions[get_column_letter(C_JS)].width = 12
+        ws_twamp.column_dimensions[get_column_letter(C_PS)].width = 12
+        for i in range(N):
+            ws_twamp.column_dimensions[get_column_letter(C_DS+1+i)].width = 11
+            ws_twamp.column_dimensions[get_column_letter(C_JS+1+i)].width = 11
+            ws_twamp.column_dimensions[get_column_letter(C_PS+1+i)].width = 11
 
-                for i, dt in enumerate(last7_dates):
-                    dv = avg(tw_delay[site].get(dt,[]))
-                    jv = avg(tw_jitter[site].get(dt,[]))
-                    pv = avg(tw_plr[site].get(dt,[]))
-                    wd_tw(C_DS+1+i, round(dv,2) if dv is not None else None, YELLOW_HDR, '0.00')
-                    wd_tw(C_JS+1+i, round(jv,2) if jv is not None else None, BLUE_FILL,  '0.00')
-                    wd_tw(C_PS+1+i, round(pv,4) if pv is not None else None, GREEN_FILL, '0.00')
-
-            LAST_TW = 2 + len(sites_show)
-            for i in range(N):
-                cl = get_column_letter(C_DS+1+i)
-                add_cf_greater(ws_twamp, cl, 3, LAST_TW, 100)
-
-            ws_twamp.column_dimensions[get_column_letter(C_G1)].width = 2
-            ws_twamp.column_dimensions[get_column_letter(C_G2)].width = 2
-            ws_twamp.column_dimensions[get_column_letter(C_DS)].width = 12
-            ws_twamp.column_dimensions[get_column_letter(C_JS)].width = 12
-            ws_twamp.column_dimensions[get_column_letter(C_PS)].width = 12
-            for i in range(N):
-                ws_twamp.column_dimensions[get_column_letter(C_DS+1+i)].width = 11
-                ws_twamp.column_dimensions[get_column_letter(C_JS+1+i)].width = 11
-                ws_twamp.column_dimensions[get_column_letter(C_PS+1+i)].width = 11
-
-            ws_twamp.row_dimensions[1].height = 22.05
-            ws_twamp.row_dimensions[2].height = 30.0
-            for r in range(3, LAST_TW+1): ws_twamp.row_dimensions[r].height = 16.05
-            ws_twamp.freeze_panes = 'B3'
+        ws_twamp.row_dimensions[1].height = 22.05
+        ws_twamp.row_dimensions[2].height = 30.0
+        for r in range(3, LAST_TW+1): ws_twamp.row_dimensions[r].height = 16.05
+        ws_twamp.freeze_panes = 'B3'
 
         # SHEET 11: TA AVG (Urutan sheet ke-11 identik master template)
         update_progress(88, "Menyusun sheet TA Avg & menyuntikkan data ISD (Sheet 11)...")
