@@ -31,6 +31,10 @@ st.set_page_config(
 
 # ── 2. SESSION STATE ──────────────────────────────────────────────────────────
 def init_session():
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'username' not in st.session_state:
+        st.session_state.username = None
     if 'kpi_processor' not in st.session_state:
         st.session_state.kpi_processor = None
     if 'kpi_metadata' not in st.session_state:
@@ -264,6 +268,87 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ── 4b. SISTEM AUTENTIKASI (USER & PASSWORD) ──────────────────────────────────
+def check_authentication():
+    """
+    Memeriksa status otentikasi. Jika belum login, tampilkan form login
+    dan hentikan rendering aplikasi dengan st.stop() agar data tetap aman.
+    """
+    if st.session_state.get('authenticated', False):
+        return True
+
+    # Kredensial default
+    valid_users = {
+        "admin": "wclgemoy2026",
+        "optim": "ioh2026",
+        "engineer": "nr26gemoy"
+    }
+
+    # Sinkronisasi kredensial tambahan dari st.secrets jika tersedia
+    try:
+        if hasattr(st, "secrets"):
+            if "passwords" in st.secrets:
+                for u, p in st.secrets["passwords"].items():
+                    valid_users[str(u).strip()] = str(p).strip()
+            if "users" in st.secrets:
+                for u, p in st.secrets["users"].items():
+                    valid_users[str(u).strip()] = str(p).strip()
+    except Exception:
+        pass
+
+    # Tampilan Login Berkelas & Cerah
+    st.markdown("""
+    <div class="gemoy-header" style="justify-content: center; text-align: center; margin-bottom: 25px;">
+        <div>
+            <div class="gemoy-title" style="font-size: 28px;">📡 WCL GEMOY</div>
+            <div class="gemoy-sub" style="font-size: 13px;">5G NR26 Analytics & Fast Report Engine • Secure Telecom Gateway</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _, col_login, _ = st.columns([1, 1.4, 1])
+    with col_login:
+        st.markdown("""
+        <div style="background: #FFFFFF; border: 1.5px solid #CBD5E1; border-radius: 14px; padding: 22px 24px 12px 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.06);">
+            <div style="font-size: 38px; text-align: center; margin-bottom: 4px;">🔐</div>
+            <h3 style="color: #0F172A !important; font-weight: 800; text-align: center; margin: 0 0 4px 0; font-size: 20px;">Autentikasi Pengguna</h3>
+            <p style="color: #475569 !important; font-size: 12px; text-align: center; margin: 0 0 16px 0;">Silakan masukkan Username dan Password untuk mengakses sistem.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.form("login_form", clear_on_submit=False):
+            u_input = st.text_input("Username:", placeholder="Masukkan username...", key="input_user")
+            p_input = st.text_input("Password:", type="password", placeholder="Masukkan password...", key="input_pass")
+            btn_submit = st.form_submit_button("🚀 Masuk / Login", use_container_width=True)
+
+            if btn_submit:
+                u_val = u_input.strip()
+                p_val = p_input.strip()
+                if not u_val or not p_val:
+                    st.warning("⚠️ Mohon isi Username dan Password terlebih dahulu.")
+                elif u_val in valid_users and valid_users[u_val] == p_val:
+                    st.session_state.authenticated = True
+                    st.session_state.username = u_val
+                    st.success("✅ Login berhasil! Mengalihkan ke sistem...")
+                    st.rerun()
+                else:
+                    st.error("❌ Username atau Password salah. Akses ditolak!")
+
+        st.markdown("""
+        <div style="background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:10px;padding:12px 16px;margin-top:14px;font-size:12px;color:#475569;">
+            <b style="color:#0F172A;">🔑 Akun Resmi Terdaftar:</b><br>
+            • Admin: <code style="color:#0284C7;font-weight:700;">admin</code> / <code style="color:#0284C7;">wclgemoy2026</code><br>
+            • Optim: <code style="color:#0284C7;font-weight:700;">optim</code> / <code style="color:#0284C7;">ioh2026</code><br>
+            • Engineer: <code style="color:#0284C7;font-weight:700;">engineer</code> / <code style="color:#0284C7;">nr26gemoy</code>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.stop()
+    return False
+
+# Jalankan proteksi autentikasi sebelum masuk dashboard
+check_authentication()
+
 # ── 5. HEADER RINGKAS: WCL GEMOY ──────────────────────────────────────────────
 st.markdown("""
 <div class="gemoy-header">
@@ -277,6 +362,19 @@ st.markdown("""
 
 # ── 5. SIDEBAR: DATA SOURCE (KPI & TWAMP) ─────────────────────────────────────
 with st.sidebar:
+    # ── User Profile & Logout ──
+    st.markdown(f"""
+    <div style="background:#F1F5F9;border:1.5px solid #CBD5E1;border-radius:10px;padding:10px 14px;margin-bottom:12px;">
+        <span style="font-size:11px;color:#64748B;font-weight:700;letter-spacing:0.5px;">PENGGUNA AKTIF:</span><br>
+        <span style="font-size:15px;color:#0F172A;font-weight:800;">👤 {st.session_state.get('username', 'User')}</span>
+    </div>
+    """, unsafe_allow_html=True)
+    if st.button("🚪 Keluar / Logout", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.username = None
+        st.rerun()
+    st.markdown("---")
+
     st.markdown("### 📂 Sumber Data")
 
     is_local_env = os.path.exists("D:\\")
