@@ -335,11 +335,8 @@ def check_authentication():
                     st.error("❌ Username atau Password salah. Akses ditolak!")
 
         st.markdown("""
-        <div style="background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:10px;padding:12px 16px;margin-top:14px;font-size:12px;color:#475569;">
-            <b style="color:#0F172A;">🔑 Akun Resmi Terdaftar:</b><br>
-            • Admin: <code style="color:#0284C7;font-weight:700;">admin</code> / <code style="color:#0284C7;">wclgemoy2026</code><br>
-            • Optim: <code style="color:#0284C7;font-weight:700;">optim</code> / <code style="color:#0284C7;">ioh2026</code><br>
-            • Engineer: <code style="color:#0284C7;font-weight:700;">engineer</code> / <code style="color:#0284C7;">nr26gemoy</code>
+        <div style="text-align: center; margin-top: 16px; font-size: 11px; color: #64748B;">
+            🔒 <i>Akses terbatas khusus tim resmi IOH Optimization & Engineering. Hubungi Lead Optim jika membutuhkan akses.</i>
         </div>
         """, unsafe_allow_html=True)
 
