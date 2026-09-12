@@ -394,14 +394,17 @@ with c_top1:
     clusters = meta.get('clusters', []) if meta else []
     has_real_clusters = bool(clusters and clusters != ["ALL_SITES"])
 
-    if has_real_clusters:
+    if not meta:
+        st.selectbox("Cluster Target:", ["(Muat sumber data di sidebar terlebih dahulu)"], disabled=True)
+    elif has_real_clusters:
         sel_cluster = st.selectbox("Cluster Target:", options=clusters, index=0)
         st.session_state.selected_cluster = sel_cluster
     else:
         # Jika raw data KPI tidak memiliki kolom cluster
         cur_cl = st.session_state.get('selected_cluster', '')
+        sites_list = meta.get('sites', []) if meta else []
         if not cur_cl or cur_cl == "ALL_SITES":
-            cur_cl = "JAKARTA SELATAN_02_N06_A" if any("12JKS" in str(s) for s in meta.get('sites', [])) else "WCL_NR26_REPORT"
+            cur_cl = "JAKARTA SELATAN_02_N06_A" if any("12JKS" in str(s) for s in sites_list) else "WCL_NR26_REPORT"
         user_cl_input = st.text_input(
             "🏷️ Nama Laporan / Cluster:",
             value=cur_cl,
@@ -434,7 +437,7 @@ with c_top2:
 
     if parsed_sites:
         st.markdown(f'<span style="background:#ECFDF5;color:#15803D;border:1.5px solid #86EFAC;padding:4px 12px;border-radius:15px;font-size:12px;font-weight:700;">✓ Total Site Filter: {len(parsed_sites)} Site Aktif</span>', unsafe_allow_html=True)
-    elif not has_real_clusters:
+    elif meta and not has_real_clusters:
         st.markdown('<span style="background:#FEF3C7;color:#92400E;border:1.5px solid #FCD34D;padding:4px 12px;border-radius:15px;font-size:12px;font-weight:700;">ℹ️ Masukkan Site ID target di atas (atau biarkan kosong untuk semua site di file)</span>', unsafe_allow_html=True)
     else:
         st.caption("ℹ️ Memproses seluruh site dalam cluster terpilih.")
