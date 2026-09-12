@@ -38,7 +38,11 @@ def init_session():
     if 'selected_cluster' not in st.session_state:
         st.session_state.selected_cluster = ""
     if 'isd_matcher' not in st.session_state:
-        st.session_state.isd_matcher = ISDMatcher()
+        def_isd = r"D:\Project_2025\IOH\OPTIM\5G\NR26\KPI\1st Tier.xlsx"
+        if os.path.exists(def_isd):
+            st.session_state.isd_matcher = ISDMatcher(def_isd)
+        else:
+            st.session_state.isd_matcher = ISDMatcher()
     if 'isd_df' not in st.session_state:
         st.session_state.isd_df = None
     if 'generated_report' not in st.session_state:
@@ -215,34 +219,53 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 📶 Sumber TWAMP")
+    def_tw = r"D:\Project_2025\IOH\OPTIM\5G\NR26\KPI\Twamp Performance Query Report_20260912114658\Performance Query Report_1100735.csv"
+    if not os.path.exists(def_tw):
+        def_tw = r"D:\Project_2025\IOH\OPTIM\5G\NR26\Report\5G Twamp.xlsx"
+    has_local_tw = os.path.exists(def_tw)
+
     twamp_choice = st.radio(
         "Pilihan TWAMP:",
-        ["Internal Sheet 'twamp'", "Upload File", "Path Lokal"],
+        ["Path Lokal", "Upload File", "Internal Sheet 'twamp'"] if has_local_tw else ["Upload File", "Path Lokal", "Internal Sheet 'twamp'"],
         index=0
     )
     twamp_sources = None
     if twamp_choice == "Upload File":
-        tw_up = st.file_uploader("Upload TWAMP:", type=["xlsx", "xlsm", "csv"], accept_multiple_files=True)
+        tw_up = st.file_uploader("Upload TWAMP (.xlsx, .xlsm, .csv):", type=["xlsx", "xlsm", "csv"], accept_multiple_files=True)
         if tw_up:
             twamp_sources = list(tw_up)
+            st.caption(f"✅ {len(twamp_sources)} file TWAMP diupload.")
     elif twamp_choice == "Path Lokal":
-        def_tw = r"D:\Project_2025\IOH\OPTIM\5G\NR26\Report\5G Twamp.xlsx"
-        tw_in = st.text_input("Path File TWAMP:", value=def_tw if os.path.exists(def_tw) else "")
+        tw_in = st.text_input("Path File/Folder TWAMP:", value=def_tw if has_local_tw else "")
         if tw_in and os.path.exists(tw_in):
-            twamp_sources = [tw_in]
+            if os.path.isdir(tw_in):
+                tw_files = [os.path.join(tw_in, f) for f in os.listdir(tw_in)
+                            if f.lower().endswith(('.xlsx', '.xlsm', '.csv')) and not f.startswith('~$')]
+                twamp_sources = tw_files
+                st.caption(f"📁 Folder TWAMP: {len(tw_files)} file ditemukan.")
+            else:
+                twamp_sources = [tw_in]
+                st.caption(f"📄 File TWAMP ({round(os.path.getsize(tw_in)/1024, 1)} KB)")
+        elif tw_in:
+            st.error("❌ Path TWAMP tidak ditemukan!")
 
     st.markdown("---")
     if kpi_sources:
         if st.button("🔄 Muat Data", use_container_width=True):
             with st.spinner("Memindai data..."):
                 try:
-                    proc = WCLProcessor(kpi_sources=kpi_sources, twamp_sources=twamp_sources)
+                    proc = WCLProcessor(
+                        kpi_sources=kpi_sources,
+                        twamp_sources=twamp_sources,
+                        isd_source=st.session_state.isd_matcher
+                    )
                     meta = proc.inspect_sources()
                     st.session_state.kpi_processor = proc
                     st.session_state.kpi_metadata = meta
                     if meta['clusters']:
                         st.session_state.selected_cluster = meta['clusters'][0]
-                    st.success(f"Ditemukan {len(meta['clusters'])} cluster & {len(meta['sites'])} site.")
+                    tw_cnt = len(meta.get('twamp_dates', []))
+                    st.success(f"Ditemukan {len(meta['clusters'])} cluster, {len(meta['sites'])} site, {tw_cnt} tanggal TWAMP.")
                 except Exception as e:
                     st.error(f"Gagal memuat: {e}")
 
@@ -364,24 +387,48 @@ st.session_state.tw_dates_final = tw_dates_final
 
 # ── 8. PANEL 3: ISD & LIVE PREVIEW RINGKAS ────────────────────────────────────
 with st.expander("📝 Pengaturan Data ISD (Buka untuk Ubah / Paste)", expanded=False):
-    isd_choice = st.radio("Metode Input:", ["Contoh Default", "Paste Tabel Excel", "Upload File"], horizontal=True)
-    if isd_choice == "Paste Tabel Excel":
-        sample_paste = "Site ID\tSector\tISD\n11TGR0378\tsector 1\t470\n11TGR0378\tsector 2\t490\n11TGR0378\tsector 3\t520"
-        p_txt = st.text_area("Paste:", value=sample_paste, height=100)
-        if p_txt.strip():
+    def_isd_path = r"D:\Project_2025\IOH\OPTIM\5G\NR26\KPI\1st Tier.xlsx"
+    has_def_isd = os.path.exists(def_isd_path)
+    isd_choice = st.radio(
+        "Metode Input ISD:",
+        ["Path File Lokal", "Upload File", "Paste Tabel Excel"] if has_def_isd else ["Upload File", "Path File Lokal", "Paste Tabel Excel"],
+        horizontal=True
+    )
+    if isd_choice == "Path File Lokal":
+        isd_p_str = st.text_input("Path File ISD (.xlsx, .csv):", value=def_isd_path if has_def_isd else "")
+        if isd_p_str and os.path.exists(isd_p_str):
             try:
-                sep = '\t' if '\t' in p_txt else ','
-                st.session_state.isd_matcher = ISDMatcher(pd.read_csv(io.StringIO(p_txt), sep=sep))
+                st.session_state.isd_matcher = ISDMatcher(isd_p_str)
+                if st.session_state.kpi_processor:
+                    st.session_state.kpi_processor.set_isd_matcher(st.session_state.isd_matcher)
+                st.caption(f"✅ Terhubung: {len(st.session_state.isd_matcher.mapping)} site-sector ISD termuat (Otomatis konversi km ke meter).")
             except Exception as e:
-                st.error(f"Format error: {e}")
+                st.error(f"Error memuat file ISD: {e}")
+        elif isd_p_str:
+            st.error("❌ Path file ISD tidak ditemukan!")
     elif isd_choice == "Upload File":
         f_isd = st.file_uploader("Upload ISD (.xlsx, .csv):", type=["xlsx", "csv"])
         if f_isd:
             try:
                 df_isd = pd.read_csv(f_isd) if f_isd.name.endswith('.csv') else pd.read_excel(f_isd)
                 st.session_state.isd_matcher = ISDMatcher(df_isd)
+                if st.session_state.kpi_processor:
+                    st.session_state.kpi_processor.set_isd_matcher(st.session_state.isd_matcher)
+                st.caption(f"✅ {len(st.session_state.isd_matcher.mapping)} site-sector ISD terupload (Otomatis konversi km ke meter).")
             except Exception as e:
                 st.error(f"Error membaca file: {e}")
+    elif isd_choice == "Paste Tabel Excel":
+        sample_paste = "Site ID\tSector\tISD\n11TGR0378\tsector 1\t470\n11TGR0378\tsector 2\t490\n11TGR0378\tsector 3\t520"
+        p_txt = st.text_area("Paste:", value=sample_paste, height=100)
+        if p_txt.strip():
+            try:
+                sep = '\t' if '\t' in p_txt else ','
+                st.session_state.isd_matcher = ISDMatcher(pd.read_csv(io.StringIO(p_txt), sep=sep))
+                if st.session_state.kpi_processor:
+                    st.session_state.kpi_processor.set_isd_matcher(st.session_state.isd_matcher)
+                st.caption(f"✅ {len(st.session_state.isd_matcher.mapping)} site-sector ISD dipaste.")
+            except Exception as e:
+                st.error(f"Format error: {e}")
 
 # Live Preview
 proc = st.session_state.kpi_processor
@@ -434,6 +481,9 @@ if btn_run:
         out_fpath = os.path.join(save_folder, out_fname) if (save_folder and os.path.exists(save_folder)) else None
 
         try:
+            if proc and st.session_state.isd_matcher:
+                proc.set_isd_matcher(st.session_state.isd_matcher)
+
             res = proc.generate_report(
                 target_cluster=target_cluster,
                 site_filter=site_filter,
@@ -441,6 +491,7 @@ if btn_run:
                 before_dates=bef_d,
                 after_dates=aft_d,
                 twamp_dates=tw_d,
+                isd_matcher=st.session_state.isd_matcher,
                 output_file=out_fpath,
                 progress_callback=on_prog
             )

@@ -32,6 +32,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 DEFAULT_MASTER_TEMPLATE = r"D:\Project_2025\IOH\OPTIM\5G\NR26\Report\KOTA TANGERANG_01_N04_C\Output\WCL KOTA TANGERANG_01_N04_C-2.xlsx"
+DEFAULT_ISD_PATH = r"D:\Project_2025\IOH\OPTIM\5G\NR26\KPI\1st Tier.xlsx"
 
 def clean_site_batch_input(text):
     """
@@ -125,6 +126,9 @@ class ISDMatcher:
                     continue
                 try:
                     num_val = float(v)
+                    if 0 < num_val < 15:
+                        num_val = num_val * 1000.0
+                    num_val = int(round(num_val))
                 except (ValueError, TypeError):
                     continue
                 if isinstance(k, tuple) and len(k) >= 2:
@@ -171,7 +175,7 @@ class ISDMatcher:
 
         # 1. Deteksi kolom ISD
         if not isd_col:
-            for candidate in ['isd', 'isd (m)', 'isd m', 'isd_m', 'isd(m)', 'distance', 'distance_m', 'jarak']:
+            for candidate in ['isd', 'isd (m)', 'isd m', 'isd_m', 'isd(m)', 'average of distance', 'distance', 'distance_m', 'jarak']:
                 for c_low, orig in col_map.items():
                     if candidate in c_low:
                         isd_col = orig
@@ -227,6 +231,12 @@ class ISDMatcher:
                 isd_val = float(row[isd_col])
             except (ValueError, TypeError):
                 continue
+
+            # Konversi otomatis km (0.xxxx atau < 15) menjadi meter (dikalikan 1000)
+            dist_unit = str(row.get('Distance_Unit', '')).strip().lower()
+            if dist_unit == 'km' or (0 < isd_val < 15):
+                isd_val = isd_val * 1000.0
+            isd_val = int(round(isd_val))
 
             site_val = row.get(site_col) if site_col else None
             sec_val = row.get(sector_col) if sector_col else None
@@ -443,8 +453,9 @@ def resolve_custom_dates(specific_dates, date_range, available_pool, label=""):
         parsed_list = []
         for d in specific_dates:
             pd_d = parse_date_val(d)
-            if pd_d and pd_d in avail_set:
-                parsed_list.append(pd_d)
+            if pd_d:
+                if not avail_set or pd_d in avail_set:
+                    parsed_list.append(pd_d)
         if parsed_list:
             return sorted(set(parsed_list))
 
@@ -471,9 +482,23 @@ def find_5g_sheet(wb):
     return wb.active
 
 def find_twamp_sheet(wb):
-    for name in ['twamp', 'Twamp', 'TWAMP']:
-        if name in wb.sheetnames:
+    if wb is None:
+        return None
+    # 1. By name containing twamp
+    for name in wb.sheetnames:
+        if 'twamp' in str(name).strip().lower():
             return wb[name]
+    # 2. By column headers (Delay, Jitter, PLR, dl_dmax_delay)
+    for sh_name in wb.sheetnames:
+        ws = wb[sh_name]
+        first_row = next(ws.iter_rows(values_only=True), None)
+        if first_row:
+            row_str = " ".join(str(c).lower() for c in first_row if c is not None)
+            if any(k in row_str for k in ['dl_dmax_delay', 'dl_jmax_jiter', 'dl_lostperc_plr', 'delay', 'jitter', 'plr', 'moentity']):
+                return ws
+    # 3. If only 1 sheet exists
+    if len(wb.sheetnames) == 1:
+        return wb.active
     return None
 
 def find_header_index(headers_lower, candidate_list):
@@ -1239,11 +1264,13 @@ class WCLProcessor:
         self.twamp_sources = self._normalize_sources(twamp_sources)
         self.log_callback = log_callback or print
 
-
         if isinstance(isd_source, ISDMatcher):
             self.isd_matcher = isd_source
         elif isd_source is not None:
             self.isd_matcher = ISDMatcher(isd_source)
+        elif os.path.exists(DEFAULT_ISD_PATH):
+            self.log(f"Memuat data ISD default dari: {DEFAULT_ISD_PATH}")
+            self.isd_matcher = ISDMatcher(DEFAULT_ISD_PATH)
         else:
             self.isd_matcher = ISDMatcher()
 
@@ -1251,6 +1278,12 @@ class WCLProcessor:
         self.available_dates = []
         self.all_sites = []
         self.twamp_dates_all = []
+
+    def set_isd_matcher(self, isd_matcher):
+        if isinstance(isd_matcher, ISDMatcher):
+            self.isd_matcher = isd_matcher
+        elif isd_matcher is not None:
+            self.isd_matcher = ISDMatcher(isd_matcher)
 
     def log(self, msg):
         self.log_callback(msg)
@@ -1279,19 +1312,30 @@ class WCLProcessor:
 
     def _open_wb(self, src):
         is_csv = False
-        if isinstance(src, (str, os.PathLike)) and str(src).lower().endswith('.csv'):
+        src_str = str(src).lower() if isinstance(src, (str, os.PathLike)) else (str(src.name).lower() if hasattr(src, 'name') else '')
+        if src_str.endswith('.csv'):
             is_csv = True
-        elif hasattr(src, 'name') and str(src.name).lower().endswith('.csv'):
-            is_csv = True
+
+        is_twamp = ('twamp' in src_str) or (self.twamp_sources and src in self.twamp_sources)
 
         if is_csv:
             try:
                 if hasattr(src, 'seek'):
                     src.seek(0)
-                df = pd.read_csv(src)
+                try:
+                    df = pd.read_csv(src, encoding='utf-8-sig')
+                except Exception:
+                    if hasattr(src, 'seek'):
+                        src.seek(0)
+                    df = pd.read_csv(src, encoding='latin1')
+
+                col_str = " ".join(str(c).lower() for c in df.columns)
+                if not is_twamp and any(k in col_str for k in ['dl_dmax_delay', 'delay', 'jitter', 'plr', 'moentity']):
+                    is_twamp = True
+
                 wb = Workbook()
                 ws = wb.active
-                ws.title = "5G Daily"
+                ws.title = "TWAMP" if is_twamp else "5G Daily"
                 ws.append(list(df.columns))
                 for r in df.itertuples(index=False):
                     ws.append(list(r))
@@ -1356,12 +1400,13 @@ class WCLProcessor:
                 wb = self._open_wb(src)
                 ws_tw = find_twamp_sheet(wb)
                 if ws_tw:
-                    first_row = next(ws_tw.iter_rows(values_only=True), None)
-                    if first_row:
+                    all_rows = list(ws_tw.iter_rows(values_only=True))
+                    if all_rows:
+                        first_row = all_rows[0]
                         hdrs_tw = {str(h).strip().lower(): i for i, h in enumerate(first_row) if h is not None}
                         it_date = find_header_index(hdrs_tw, ['time', 'date'])
                         if it_date is not None:
-                            for row in ws_tw.iter_rows(values_only=True):
+                            for row in all_rows[1:]:
                                 t = row[it_date]
                                 pt = parse_date_val(t)
                                 if pt:
@@ -1469,11 +1514,18 @@ class WCLProcessor:
                         before_dates=None, before_range=None,
                         after_dates=None, after_range=None,
                         twamp_dates=None, twamp_range=None,
+                        isd_matcher=None,
                         output_file=None, progress_callback=None, *args, **kwargs):
         """
         Menghasilkan laporan Excel WCL NR26.
         Mendukung Band Filter cerdas (NR26 + Baseline NR21).
         """
+        if isd_matcher is not None:
+            self.set_isd_matcher(isd_matcher)
+        elif not getattr(self.isd_matcher, 'mapping', None) and os.path.exists(DEFAULT_ISD_PATH):
+            self.log(f"Memuat data ISD default dari: {DEFAULT_ISD_PATH}")
+            self.isd_matcher = ISDMatcher(DEFAULT_ISD_PATH)
+
         if 'band_filter' in kwargs:
             band_filter = kwargs['band_filter']
         elif 'band' in kwargs:
@@ -1656,8 +1708,9 @@ class WCLProcessor:
                 wb = self._open_wb(src)
                 ws_tw = find_twamp_sheet(wb)
                 if ws_tw:
-                    first_row = next(ws_tw.iter_rows(values_only=True), None)
-                    if first_row:
+                    all_rows = list(ws_tw.iter_rows(values_only=True))
+                    if all_rows:
+                        first_row = all_rows[0]
                         hdrs_tw = {str(h).strip().lower(): i for i, h in enumerate(first_row) if h is not None}
                         it_date   = find_header_index(hdrs_tw, ['time', 'date'])
                         it_site   = find_header_index(hdrs_tw, ['site_id', 'site id', 'site'])
@@ -1665,7 +1718,7 @@ class WCLProcessor:
                         it_jitter = find_header_index(hdrs_tw, ['jitter', 'dl_jmax_jiter'])
                         it_plr    = find_header_index(hdrs_tw, ['plr', 'dl_lostperc_plr'])
 
-                        for row in ws_tw.iter_rows(values_only=True):
+                        for row in all_rows[1:]:
                             t = row[it_date] if it_date is not None else None
                             pt = parse_date_val(t)
                             if pt: tw_dates_set.add(pt)
@@ -1680,16 +1733,26 @@ class WCLProcessor:
                                 dv = row[it_delay]  if it_delay is not None else None
                                 jv = row[it_jitter] if it_jitter is not None else None
                                 pv = row[it_plr]    if it_plr is not None else None
-                                tw_delay[si_clean][pt].append(float(dv)) if dv is not None else None
-                                tw_jitter[si_clean][pt].append(float(jv)) if jv is not None else None
-                                tw_plr[si_clean][pt].append(float(pv)) if pv is not None else None
-                            except: pass
+                                if dv is not None and str(dv).strip() != '':
+                                    tw_delay[si_clean][pt].append(float(dv))
+                                if jv is not None and str(jv).strip() != '':
+                                    tw_jitter[si_clean][pt].append(float(jv))
+                                if pv is not None and str(pv).strip() != '':
+                                    tw_plr[si_clean][pt].append(float(pv))
+                            except Exception: pass
                 wb.close()
             except Exception as e:
                 self.log(f"  [Peringatan] Gagal membaca TWAMP: {e}")
 
         custom_tw = resolve_custom_dates(twamp_dates, twamp_range, sorted(tw_dates_set), label="TWAMP")
-        last7_dates = custom_tw if custom_tw else sorted(tw_dates_set)[-7:]
+        if custom_tw:
+            last7_dates = custom_tw
+        elif tw_dates_set:
+            last7_dates = sorted(tw_dates_set)[-7:]
+        elif twamp_dates:
+            last7_dates = [parse_date_val(d) for d in twamp_dates if parse_date_val(d)]
+        else:
+            last7_dates = []
         tw_sites = sorted(tw_sites)
 
         # BUILD OUTPUT WORKBOOK
@@ -1833,7 +1896,7 @@ class WCLProcessor:
                 sub_hdr(C_JS+1+i, lbl, BLUE_FILL)
                 sub_hdr(C_PS+1+i, lbl, GREEN_FILL)
 
-            sites_show = tw_sites if tw_sites else sites_unique
+            sites_show = sorted(list(sites_unique)) if sites_unique else sorted(list(tw_sites))
             for ri, site in enumerate(sites_show):
                 nr = 3 + ri
                 def wd_tw(col, val, fill, numfmt=None):
