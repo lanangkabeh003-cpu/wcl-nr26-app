@@ -1,0 +1,11 @@
+services:
+  wcl-gemoy:
+    build: .
+    container_name: wcl_gemoy_app
+    restart: always
+    ports:
+      - "8501:8501"
+    environment:
+      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=500
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
