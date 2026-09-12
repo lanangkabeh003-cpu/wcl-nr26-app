@@ -56,7 +56,22 @@ def init_session():
 
 init_session()
 
-# ── 3. CUSTOM CSS: SLEEK, MODERN & RINGKAS (DARK TEAL THEME) ─────────────────
+# ── 3. HELPER: SINKRONISASI ISD KE PROCESSOR SECARA AMAN ──────────────────────
+def sync_isd_to_processor(proc, matcher):
+    if not proc or not matcher:
+        return
+    if hasattr(proc, 'set_isd_matcher'):
+        try:
+            proc.set_isd_matcher(matcher)
+            return
+        except Exception:
+            pass
+    try:
+        proc.isd_matcher = matcher
+    except Exception:
+        pass
+
+# ── 4. CUSTOM CSS: TEMA CERAH, BERSIH & TULISAN SUPER JELAS ──────────────────
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap');
@@ -65,61 +80,100 @@ st.markdown("""
         font-family: 'Poppins', sans-serif !important;
     }
 
-    body, .stApp {
-        background: linear-gradient(145deg, #02121B 0%, #05202A 45%, #072B38 100%) !important;
-        color: #F1F5F9 !important;
+    /* Background Aplikasi Cerah Bersih */
+    .stApp {
+        background: #F8FAFC !important;
+        color: #0F172A !important;
     }
 
-    /* Header Ringkas */
+    /* Sidebar Cerah */
+    section[data-testid="stSidebar"] {
+        background-color: #FFFFFF !important;
+        border-right: 1.5px solid #E2E8F0 !important;
+    }
+    section[data-testid="stSidebar"] * {
+        color: #0F172A !important;
+    }
+
+    /* Pastikan SEMUA Teks & Label Kontras Tinggi dan Sangat Jelas */
+    label, p, span, div {
+        color: #0F172A !important;
+    }
+    .stMarkdown p, .stCaption p {
+        color: #334155 !important;
+    }
+    div[data-testid*="stRadio"] label p,
+    div[data-testid*="stSelectbox"] label p,
+    div[data-testid*="stTextInput"] label p,
+    div[data-testid*="stTextArea"] label p,
+    div[data-testid*="stFileUploader"] label p {
+        color: #0F172A !important;
+        font-weight: 700 !important;
+        font-size: 14px !important;
+    }
+
+    /* Radio button options yang jelas */
+    div[data-testid="stRadio"] div[role="radiogroup"] label {
+        background: #FFFFFF !important;
+        border: 1.5px solid #CBD5E1 !important;
+        border-radius: 8px !important;
+        padding: 6px 14px !important;
+        margin-right: 8px !important;
+        margin-bottom: 6px !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label p {
+        color: #0F172A !important;
+        font-weight: 600 !important;
+    }
+
+    /* Header Banner Cerah & Elegan (Executive Navy-Sky Gradient) */
     .gemoy-header {
-        background: linear-gradient(135deg, #031824 0%, #062E3B 50%, #0A4354 100%);
-        border: 1px solid rgba(0, 242, 254, 0.25);
-        border-radius: 15px;
-        padding: 18px 24px;
-        margin-bottom: 18px;
+        background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 55%, #0284C7 100%);
+        border-radius: 14px;
+        padding: 20px 24px;
+        margin-bottom: 20px;
         display: flex;
         justify-content: space-between;
         align-items: center;
-        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.35);
+        box-shadow: 0 4px 15px rgba(2, 132, 199, 0.15);
     }
     .gemoy-title {
         font-size: 26px;
         font-weight: 800;
-        letter-spacing: -0.5px;
         margin: 0;
-        background: linear-gradient(90deg, #FFFFFF 0%, #38BDF8 50%, #00F2FE 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: #FFFFFF !important;
+        letter-spacing: -0.5px;
     }
     .gemoy-sub {
-        font-size: 12.5px;
-        color: #94A3B8;
-        margin-top: 2px;
+        font-size: 13px;
+        color: #E0F2FE !important;
+        margin-top: 4px;
     }
     .gemoy-tag {
-        background: rgba(0, 242, 254, 0.12);
-        border: 1px solid #00F2FE;
-        color: #00F2FE;
+        background: rgba(255, 255, 255, 0.2);
+        border: 1.5px solid #BAE6FD;
+        color: #FFFFFF !important;
         font-size: 11px;
-        font-weight: 700;
-        padding: 4px 12px;
+        font-weight: 800;
+        padding: 6px 14px;
         border-radius: 20px;
         letter-spacing: 0.5px;
     }
 
-    /* Kartu Ringkas */
+    /* Kartu Card Cerah (Crisp White Card) */
     .gemoy-card {
-        background: rgba(6, 35, 45, 0.72);
-        border: 1px solid rgba(20, 184, 166, 0.22);
-        border-radius: 15px;
-        padding: 16px 20px;
-        margin-bottom: 16px;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+        background: #FFFFFF !important;
+        border: 1.5px solid #E2E8F0 !important;
+        border-radius: 14px;
+        padding: 18px 22px;
+        margin-bottom: 18px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
     }
     .gemoy-card-title {
-        font-size: 15px;
-        font-weight: 700;
-        color: #F8FAFC;
+        font-size: 16px;
+        font-weight: 800;
+        color: #0F172A !important;
         margin-bottom: 12px;
         display: flex;
         align-items: center;
@@ -128,49 +182,89 @@ st.markdown("""
 
     /* Live Preview Stat Box */
     .stat-pill {
-        background: rgba(3, 21, 32, 0.7);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: #FFFFFF !important;
+        border: 1.5px solid #E2E8F0 !important;
         border-radius: 12px;
-        padding: 12px 14px;
+        padding: 14px 16px;
         text-align: center;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
     }
     .stat-val {
-        font-size: 22px;
+        font-size: 26px;
         font-weight: 800;
     }
     .stat-lbl {
-        font-size: 11px;
-        font-weight: 600;
-        color: #94A3B8;
+        font-size: 12px;
+        font-weight: 700;
+        color: #475569 !important;
         text-transform: uppercase;
-        margin-top: 2px;
+        margin-top: 4px;
+    }
+
+    /* Form Controls */
+    input, textarea, select {
+        background-color: #FFFFFF !important;
+        color: #0F172A !important;
+        border: 1.5px solid #CBD5E1 !important;
+        border-radius: 8px !important;
+        font-weight: 500 !important;
+    }
+    input:focus, textarea:focus {
+        border-color: #0284C7 !important;
+        box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.2) !important;
+    }
+
+    /* File Uploader Dropzone */
+    [data-testid="stFileUploaderDropzone"] {
+        background-color: #FFFFFF !important;
+        border: 2px dashed #0284C7 !important;
+        border-radius: 10px !important;
+    }
+    [data-testid="stFileUploaderDropzone"]:hover {
+        background-color: #F0F9FF !important;
+    }
+    [data-testid="stFileUploaderDropzone"] * {
+        color: #0F172A !important;
+    }
+
+    /* Expander Cerah */
+    [data-testid="stExpander"] {
+        background: #FFFFFF !important;
+        border: 1.5px solid #E2E8F0 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03) !important;
+    }
+    [data-testid="stExpander"] summary span {
+        color: #0F172A !important;
+        font-weight: 700 !important;
     }
 
     /* Tombol Utama */
     .stButton>button {
-        background: linear-gradient(135deg, #00F2FE 0%, #0D9488 100%) !important;
-        color: #02121B !important;
+        background: linear-gradient(135deg, #0284C7 0%, #0D9488 100%) !important;
+        color: #FFFFFF !important;
         border: none !important;
         padding: 12px 24px !important;
         font-weight: 800 !important;
         font-size: 15px !important;
         border-radius: 12px !important;
-        box-shadow: 0 6px 20px rgba(0, 242, 254, 0.3) !important;
+        box-shadow: 0 4px 15px rgba(2, 132, 199, 0.35) !important;
         transition: all 0.2s ease !important;
     }
     .stButton>button:hover {
         transform: translateY(-1px) !important;
-        box-shadow: 0 8px 24px rgba(0, 242, 254, 0.45) !important;
+        box-shadow: 0 6px 20px rgba(2, 132, 199, 0.5) !important;
     }
 
+    /* DataFrame */
     .stDataFrame {
-        border-radius: 12px !important;
-        overflow: hidden !important;
+        border: 1px solid #E2E8F0 !important;
+        border-radius: 10px !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ── 4. HEADER RINGKAS: WCL GEMOY ──────────────────────────────────────────────
+# ── 5. HEADER RINGKAS: WCL GEMOY ──────────────────────────────────────────────
 st.markdown("""
 <div class="gemoy-header">
     <div>
@@ -312,7 +406,7 @@ with c_top2:
     st.session_state.site_filter = parsed_sites if parsed_sites else None
 
     if parsed_sites:
-        st.markdown(f'<span style="background:rgba(16,185,129,0.2);color:#10B981;border:1px solid #10B981;padding:3px 10px;border-radius:15px;font-size:12px;font-weight:700;">✓ Total Site Filter: {len(parsed_sites)} Site Aktif</span>', unsafe_allow_html=True)
+        st.markdown(f'<span style="background:#ECFDF5;color:#15803D;border:1.5px solid #86EFAC;padding:4px 12px;border-radius:15px;font-size:12px;font-weight:700;">✓ Total Site Filter: {len(parsed_sites)} Site Aktif</span>', unsafe_allow_html=True)
     else:
         st.caption("ℹ️ Memproses seluruh site dalam cluster.")
 
@@ -399,8 +493,7 @@ with st.expander("📝 Pengaturan Data ISD (Buka untuk Ubah / Paste)", expanded=
         if isd_p_str and os.path.exists(isd_p_str):
             try:
                 st.session_state.isd_matcher = ISDMatcher(isd_p_str)
-                if st.session_state.kpi_processor:
-                    st.session_state.kpi_processor.set_isd_matcher(st.session_state.isd_matcher)
+                sync_isd_to_processor(st.session_state.kpi_processor, st.session_state.isd_matcher)
                 st.caption(f"✅ Terhubung: {len(st.session_state.isd_matcher.mapping)} site-sector ISD termuat (Otomatis konversi km ke meter).")
             except Exception as e:
                 st.error(f"Error memuat file ISD: {e}")
@@ -412,8 +505,7 @@ with st.expander("📝 Pengaturan Data ISD (Buka untuk Ubah / Paste)", expanded=
             try:
                 df_isd = pd.read_csv(f_isd) if f_isd.name.endswith('.csv') else pd.read_excel(f_isd)
                 st.session_state.isd_matcher = ISDMatcher(df_isd)
-                if st.session_state.kpi_processor:
-                    st.session_state.kpi_processor.set_isd_matcher(st.session_state.isd_matcher)
+                sync_isd_to_processor(st.session_state.kpi_processor, st.session_state.isd_matcher)
                 st.caption(f"✅ {len(st.session_state.isd_matcher.mapping)} site-sector ISD terupload (Otomatis konversi km ke meter).")
             except Exception as e:
                 st.error(f"Error membaca file: {e}")
@@ -424,8 +516,7 @@ with st.expander("📝 Pengaturan Data ISD (Buka untuk Ubah / Paste)", expanded=
             try:
                 sep = '\t' if '\t' in p_txt else ','
                 st.session_state.isd_matcher = ISDMatcher(pd.read_csv(io.StringIO(p_txt), sep=sep))
-                if st.session_state.kpi_processor:
-                    st.session_state.kpi_processor.set_isd_matcher(st.session_state.isd_matcher)
+                sync_isd_to_processor(st.session_state.kpi_processor, st.session_state.isd_matcher)
                 st.caption(f"✅ {len(st.session_state.isd_matcher.mapping)} site-sector ISD dipaste.")
             except Exception as e:
                 st.error(f"Format error: {e}")
@@ -446,10 +537,10 @@ if proc and target_cluster:
         m_rate = (mat_cells / tot_cells * 100) if tot_cells > 0 else 0.0
 
         p1, p2, p3, p4 = st.columns(4)
-        with p1: st.markdown(f'<div class="stat-pill"><div class="stat-val" style="color:#00F2FE;">{tot_sites}</div><div class="stat-lbl">Total Sites</div></div>', unsafe_allow_html=True)
-        with p2: st.markdown(f'<div class="stat-pill"><div class="stat-val" style="color:#38BDF8;">{tot_cells}</div><div class="stat-lbl">Total Cells</div></div>', unsafe_allow_html=True)
-        with p3: st.markdown(f'<div class="stat-pill"><div class="stat-val" style="color:#10B981;">{mat_cells}</div><div class="stat-lbl">ISD Cocok</div></div>', unsafe_allow_html=True)
-        with p4: st.markdown(f'<div class="stat-pill"><div class="stat-val" style="color:#F59E0B;">{m_rate:.0f}%</div><div class="stat-lbl">Match Rate</div></div>', unsafe_allow_html=True)
+        with p1: st.markdown(f'<div class="stat-pill"><div class="stat-val" style="color:#0284C7;">{tot_sites}</div><div class="stat-lbl">Total Sites</div></div>', unsafe_allow_html=True)
+        with p2: st.markdown(f'<div class="stat-pill"><div class="stat-val" style="color:#2563EB;">{tot_cells}</div><div class="stat-lbl">Total Cells</div></div>', unsafe_allow_html=True)
+        with p3: st.markdown(f'<div class="stat-pill"><div class="stat-val" style="color:#16A34A;">{mat_cells}</div><div class="stat-lbl">ISD Cocok</div></div>', unsafe_allow_html=True)
+        with p4: st.markdown(f'<div class="stat-pill"><div class="stat-val" style="color:#D97706;">{m_rate:.0f}%</div><div class="stat-lbl">Match Rate</div></div>', unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
     except Exception as e:
         st.caption(f"Status preview: {e}")
@@ -481,20 +572,25 @@ if btn_run:
         out_fpath = os.path.join(save_folder, out_fname) if (save_folder and os.path.exists(save_folder)) else None
 
         try:
-            if proc and st.session_state.isd_matcher:
-                proc.set_isd_matcher(st.session_state.isd_matcher)
+            sync_isd_to_processor(proc, st.session_state.isd_matcher)
 
-            res = proc.generate_report(
-                target_cluster=target_cluster,
-                site_filter=site_filter,
-                band_filter=st.session_state.band_mode,
-                before_dates=bef_d,
-                after_dates=aft_d,
-                twamp_dates=tw_d,
-                isd_matcher=st.session_state.isd_matcher,
-                output_file=out_fpath,
-                progress_callback=on_prog
-            )
+            gen_kwargs = {
+                'target_cluster': target_cluster,
+                'site_filter': site_filter,
+                'band_filter': st.session_state.band_mode,
+                'before_dates': bef_d,
+                'after_dates': aft_d,
+                'twamp_dates': tw_d,
+                'output_file': out_fpath,
+                'progress_callback': on_prog
+            }
+            if hasattr(proc, 'generate_report'):
+                import inspect
+                sig = inspect.signature(proc.generate_report)
+                if 'isd_matcher' in sig.parameters:
+                    gen_kwargs['isd_matcher'] = st.session_state.isd_matcher
+
+            res = proc.generate_report(**gen_kwargs)
             st.session_state.generated_report = res
             st.success(f"🎉 Selesai! Berhasil membuat 11 sheet ({res['total_cells']} cells). Master Template Match: 100%.")
         except Exception as e:
